@@ -80,9 +80,20 @@ class ProviderLog(Base):
 
 
 def _engine():
-    url = get_settings().database_url
-    connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
+    url = normalize_database_url(get_settings().database_url)
+    connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {"connect_timeout": 10}
     return create_engine(url, pool_pre_ping=True, connect_args=connect_args)
+
+
+def normalize_database_url(url: str) -> str:
+    if url.startswith("postgresql://"):
+        url = url.replace("postgresql://", "postgresql+psycopg://", 1)
+    if url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql+psycopg://", 1)
+    if url.startswith("postgresql+psycopg://") and "sslmode=" not in url:
+        separator = "&" if "?" in url else "?"
+        return f"{url}{separator}sslmode=require"
+    return url
 
 
 engine = _engine()

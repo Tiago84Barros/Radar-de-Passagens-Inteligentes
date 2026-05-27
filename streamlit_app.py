@@ -5,7 +5,7 @@ from datetime import date, timedelta
 import pandas as pd
 import plotly.express as px
 import streamlit as st
-from sqlalchemy import distinct, func, select
+from sqlalchemy import func, select
 
 from app.db import AlertLog, FlightQuote, FlightSearch, init_db, session_scope
 from app.monitor import run_due_searches, run_search_once
@@ -106,9 +106,9 @@ def load_summary() -> dict:
         active = db.scalar(select(func.count()).select_from(FlightSearch).where(FlightSearch.is_active.is_(True))) or 0
         alerts = db.scalar(select(func.count()).select_from(AlertLog)) or 0
         lowest = None
-        routes = db.scalar(select(func.count(distinct(FlightSearch.origin + FlightSearch.destination)))) or 0
         quotes = list(db.scalars(select(FlightQuote).order_by(FlightQuote.detected_at.desc()).limit(200)))
         searches = list(db.scalars(select(FlightSearch).order_by(FlightSearch.created_at.desc())))
+        routes = len({f"{search.origin}-{search.destination}" for search in searches})
     return {"active": active, "alerts": alerts, "lowest": lowest, "routes": routes, "quotes": quotes, "searches": searches}
 
 
@@ -345,10 +345,16 @@ def render_setup() -> None:
 
 
 def main() -> None:
-    init_db()
-    seed_if_empty()
     require_password()
     render_header()
+    try:
+        init_db()
+        seed_if_empty()
+    except Exception as exc:  # noqa: BLE001
+        st.error("Não foi possível iniciar o banco de dados.")
+        st.write("Confira se o secret `DATABASE_URL` está configurado corretamente no Streamlit Cloud.")
+        st.code(str(exc), language="text")
+        st.stop()
     summary = load_summary()
     tab_dashboard, tab_new, tab_searches, tab_history, tab_setup = st.tabs(
         ["Dashboard", "Novo monitoramento", "Buscas ativas", "Histórico", "Configuração"]
