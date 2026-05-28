@@ -4,6 +4,7 @@ from datetime import date, timedelta
 from random import Random
 from typing import Any
 
+from scrapers.scraper_manager import get_last_scraper_diagnostics, search_all_scrapers
 from providers.travelpayouts_provider import TravelPayoutsProvider, TravelPayoutsProviderError
 
 
@@ -60,6 +61,19 @@ def search_all_providers(search_params: dict[str, Any]) -> list[dict[str, Any]]:
         }
         results.extend(_demo_results(search_params))
 
+    scraper_results = search_all_scrapers(search_params)
+    results.extend(scraper_results)
+    scraper_diagnostics = get_last_scraper_diagnostics()
+    if scraper_results:
+        _LAST_PROVIDER_DIAGNOSTIC = {
+            "provider": "hybrid",
+            "status": "hybrid_ok",
+            "message": f"{len(results)} cotacao(oes) coletadas entre Travelpayouts e scrapers.",
+            "scrapers": scraper_diagnostics,
+        }
+    elif scraper_diagnostics:
+        _LAST_PROVIDER_DIAGNOSTIC["scrapers"] = scraper_diagnostics
+
     return _sort_and_dedupe(results)
 
 
@@ -72,6 +86,7 @@ def _sort_and_dedupe(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for item in results:
         key = (
             item.get("provider"),
+            item.get("source"),
             item.get("origin"),
             item.get("destination"),
             item.get("departure_date"),
@@ -106,6 +121,7 @@ def _demo_results(
         results.append(
             {
                 "provider": provider_name,
+                "source": provider_name,
                 "origin": origin,
                 "destination": destination,
                 "departure_date": departure_date,

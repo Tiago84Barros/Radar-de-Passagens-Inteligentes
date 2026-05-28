@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from html import escape
 from datetime import date, timedelta
 from typing import Any
 
@@ -42,6 +43,36 @@ OPPORTUNITY_LABELS = {
     "Boa oportunidade": "Boa oportunidade",
     "Ótima oportunidade": "Ótima oportunidade",
     "Excelente oportunidade": "Excelente oportunidade",
+}
+
+DESTINATION_IMAGE_BY_CODE = {
+    "LIS": "https://images.unsplash.com/photo-1509356843151-3e7d96241e11?auto=format&fit=crop&w=1600&q=80",
+    "PAR": "https://images.unsplash.com/photo-1502602898657-3e91760cbb34?auto=format&fit=crop&w=1600&q=80",
+    "NYC": "https://images.unsplash.com/photo-1485871981521-5b1fd3805eee?auto=format&fit=crop&w=1600&q=80",
+    "LON": "https://images.unsplash.com/photo-1513635269975-59663e0ac1ad?auto=format&fit=crop&w=1600&q=80",
+    "ROM": "https://images.unsplash.com/photo-1529260830199-42c24126f198?auto=format&fit=crop&w=1600&q=80",
+    "MAD": "https://images.unsplash.com/photo-1539037116277-4db20889f2d4?auto=format&fit=crop&w=1600&q=80",
+    "BER": "https://images.unsplash.com/photo-1560969184-10fe8719e047?auto=format&fit=crop&w=1600&q=80",
+    "SCL": "https://images.unsplash.com/photo-1518709268805-4e9042af2176?auto=format&fit=crop&w=1600&q=80",
+    "MVD": "https://images.unsplash.com/photo-1597537159148-127365f8bc53?auto=format&fit=crop&w=1600&q=80",
+    "BUE": "https://images.unsplash.com/photo-1589909202802-8f4aadce1849?auto=format&fit=crop&w=1600&q=80",
+    "GRU": "https://images.unsplash.com/photo-1543059080-f9b1272213d5?auto=format&fit=crop&w=1600&q=80",
+    "BEL": "https://images.unsplash.com/photo-1583417319070-4a69db38a482?auto=format&fit=crop&w=1600&q=80",
+}
+
+DESTINATION_NAME_BY_CODE = {
+    "LIS": "Lisboa",
+    "PAR": "Paris",
+    "NYC": "Nova York",
+    "LON": "Londres",
+    "ROM": "Roma",
+    "MAD": "Madri",
+    "BER": "Berlim",
+    "SCL": "Santiago",
+    "MVD": "Montevideo",
+    "BUE": "Buenos Aires",
+    "GRU": "Sao Paulo",
+    "BEL": "Belem",
 }
 
 
@@ -139,6 +170,74 @@ def get_provider_status(settings) -> dict[str, Any]:
         "demo_mode": not bool(active),
         "amadeus_env": settings.amadeus_env,
     }
+
+
+def destination_image_url(code: str, label: str = "") -> str:
+    normalized_code = str(code or "").upper()
+    if normalized_code in DESTINATION_IMAGE_BY_CODE:
+        return DESTINATION_IMAGE_BY_CODE[normalized_code]
+    query_source = label or normalized_code or "travel destination"
+    query = "+".join(part for part in str(query_source).replace("(", " ").replace(")", " ").split() if part)
+    return f"https://source.unsplash.com/1600x900/?{query},travel,landmark"
+
+
+def route_context_from_latest(summary: dict) -> dict[str, Any] | None:
+    session_context = st.session_state.get("last_route_context")
+    if session_context:
+        return session_context
+    searches = summary.get("searches") or []
+    if not searches:
+        return None
+    search = searches[0]
+    origin = str(search.origin or "").upper()
+    destination = str(search.destination or "").upper()
+    return {
+        "origin_code": origin,
+        "origin_label": DESTINATION_NAME_BY_CODE.get(origin, origin),
+        "destination_code": destination,
+        "destination_label": DESTINATION_NAME_BY_CODE.get(destination, destination),
+        "departure_date": search.departure_date,
+        "return_date": search.return_date,
+        "source": "Ultima busca cadastrada",
+    }
+
+
+def render_route_postcard(summary: dict) -> None:
+    context = route_context_from_latest(summary)
+    if not context:
+        return
+    origin_code = str(context.get("origin_code") or "").upper()
+    destination_code = str(context.get("destination_code") or "").upper()
+    origin_label = context.get("origin_label") or origin_code
+    destination_label = context.get("destination_label") or destination_code
+    image_url = destination_image_url(destination_code, str(destination_label))
+    departure_text = format_date(context.get("departure_date"))
+    return_text = format_date(context.get("return_date"))
+    dates = f"Ida {departure_text}" if return_text == "-" else f"Ida {departure_text} | Volta {return_text}"
+    st.markdown(
+        f"""
+        <div class="route-postcard" style="background-image:
+            linear-gradient(90deg, rgba(8,17,31,.94) 0%, rgba(8,17,31,.72) 48%, rgba(8,17,31,.24) 100%),
+            url('{escape(image_url, quote=True)}');">
+            <div class="route-postcard-content">
+                <div class="top-kicker">Cartao postal da busca</div>
+                <div class="route-postcard-title">
+                    <span>{escape(origin_code)}</span>
+                    <span class="route-arrow">to</span>
+                    <span>{escape(destination_code)}</span>
+                </div>
+                <div class="route-postcard-subtitle">
+                    Partida: {escape(str(origin_label))} | Destino: {escape(str(destination_label))}
+                </div>
+                <div class="route-postcard-meta">
+                    <span>{escape(dates)}</span>
+                    <span>{escape(str(context.get("source") or "Busca ativa"))}</span>
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def load_summary() -> dict:
@@ -406,6 +505,15 @@ def render_sidebar(summary: dict, provider_status: dict[str, Any], db_connected:
                 st.session_state["last_location_resolution"] = (
                     f"Busca resolvida como {origin_location.label} -> {destination_location.label}."
                 )
+                st.session_state["last_route_context"] = {
+                    "origin_code": origin_location.code,
+                    "origin_label": origin_location.label,
+                    "destination_code": destination_location.code,
+                    "destination_label": destination_location.label,
+                    "departure_date": departure,
+                    "return_date": return_date if TRIP_TYPE_OPTIONS[trip_label] == "round_trip" else None,
+                    "source": "Busca feita agora" if search_now else "Monitoramento iniciado",
+                }
                 with session_scope() as db:
                     search = FlightSearch(
                         owner_email="demo@radar.local",
@@ -638,6 +746,7 @@ def render_settings(provider_status: dict[str, Any], db_connected: bool) -> None
     provider_rows = [
         {"configuração": "DATABASE_URL", "status": "Configurado" if database_configured else "Não configurado"},
         {"configuração": "TRAVELPAYOUTS_API_TOKEN", "status": "Configurado" if settings.travelpayouts_api_token else "Não configurado"},
+        {"configuração": "ENABLE_AIRLINE_SCRAPERS", "status": "Ativo" if settings.enable_airline_scrapers else "Inativo"},
         {"configuração": "TELEGRAM_BOT_TOKEN", "status": "Configurado" if settings.telegram_bot_token else "Não configurado"},
         {"configuração": "TELEGRAM_CHAT_ID", "status": "Configurado" if settings.telegram_chat_id else "Não configurado"},
         {"configuração": "Provider ativo", "status": provider_status["provider_label"]},
@@ -713,6 +822,7 @@ TELEGRAM_CHAT_ID = "seu_chat_id" """,
         """DATABASE_URL
 APP_PASSWORD
 TRAVELPAYOUTS_API_TOKEN
+ENABLE_AIRLINE_SCRAPERS
 TELEGRAM_BOT_TOKEN
 TELEGRAM_CHAT_ID
 SMTP_HOST
@@ -747,6 +857,7 @@ def main() -> None:
     render_sidebar(summary, provider_status, db_connected)
     render_header(provider_status, summary.get("latest_provider_log"))
     df_quotes = quotes_df(summary["quotes"], summary["searches"], summary["latest_alert_by_quote"])
+    render_route_postcard(summary)
     render_top_metrics(summary, df_quotes)
     st.write("")
 

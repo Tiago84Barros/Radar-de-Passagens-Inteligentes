@@ -92,6 +92,7 @@ class TravelPayoutsProvider(BaseProvider):
             results.append(
                 {
                     "provider": self.name,
+                    "source": self.name,
                     "origin": (item.get("origin") or kwargs["origin"]).upper(),
                     "destination": (item.get("destination") or kwargs["destination"]).upper(),
                     "departure_date": _date_to_day(departure_at),

@@ -57,6 +57,7 @@ class Settings:
     smtp_user: str | None
     smtp_password: str | None
     alert_from_email: str
+    enable_airline_scrapers: bool
 
     def __init__(self) -> None:
         self.database_url = get_config_value("DATABASE_URL") or _database_url_from_parts() or "sqlite:///./radar.db"
@@ -74,11 +75,16 @@ class Settings:
         self.smtp_user = get_config_value("SMTP_USER")
         self.smtp_password = get_config_value("SMTP_PASSWORD")
         self.alert_from_email = get_config_value("ALERT_FROM_EMAIL", "alerts@radar.local") or "alerts@radar.local"
+        self.enable_airline_scrapers = _as_bool(get_config_value("ENABLE_AIRLINE_SCRAPERS", "false"))
 
 
 def _normalize_amadeus_env(value: str) -> str:
     env = value.strip().lower()
     return env if env in {"test", "production"} else "test"
+
+
+def _as_bool(value: str | None) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "sim", "on"}
 
 
 @lru_cache
