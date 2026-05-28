@@ -97,18 +97,34 @@ def money(value: Any, currency: str = "R$") -> str:
     return format_brl(None if value is None or pd.isna(value) else float(value))
 
 
-def format_datetime(value: Any) -> str:
+def safe_datetime_series(values: Any) -> pd.Series:
+    try:
+        return pd.to_datetime(values, utc=True, errors="coerce", format="mixed")
+    except (TypeError, ValueError):
+        return pd.to_datetime(values, utc=True, errors="coerce")
+
+
+def safe_datetime(value: Any) -> pd.Timestamp | None:
     if value is None or pd.isna(value):
+        return None
+    parsed = safe_datetime_series(pd.Series([value])).iloc[0]
+    if pd.isna(parsed):
+        return None
+    return parsed
+
+
+def format_datetime(value: Any) -> str:
+    parsed = safe_datetime(value)
+    if parsed is None:
         return "-"
-    if isinstance(value, str):
-        return value
-    return pd.to_datetime(value).strftime("%d/%m/%Y %H:%M")
+    return parsed.strftime("%d/%m/%Y %H:%M")
 
 
 def format_date(value: Any) -> str:
-    if value is None or pd.isna(value):
+    parsed = safe_datetime(value)
+    if parsed is None:
         return "-"
-    return pd.to_datetime(value).strftime("%d/%m/%Y")
+    return parsed.strftime("%d/%m/%Y")
 
 
 def get_provider_status(settings) -> dict[str, Any]:
@@ -245,7 +261,8 @@ def opportunity_score(opportunity: str, economy: float | None, max_price: float 
 def build_metrics(summary: dict, df: pd.DataFrame) -> dict[str, Any]:
     recent = pd.DataFrame()
     if not df.empty:
-        recent = df[pd.to_datetime(df["detectado_em"], utc=True) >= (pd.Timestamp.utcnow() - pd.Timedelta(hours=24))]
+        detected_at = safe_datetime_series(df["detectado_em"])
+        recent = df[detected_at >= (pd.Timestamp.now(tz="UTC") - pd.Timedelta(hours=24))]
     positive_economy = df["economia"].clip(lower=0).sum() if not df.empty and "economia" in df else 0
     classified = {"boa_oportunidade", "excelente_oportunidade", "oportunidade_rara", "Boa oportunidade", "Ótima oportunidade", "Excelente oportunidade"}
     return {
@@ -464,7 +481,12 @@ def render_overview(summary: dict, df: pd.DataFrame) -> None:
             st.info("Ainda não há cotações. Crie uma busca na sidebar para gerar histórico.")
         else:
             daily = df.copy()
-            daily["dia"] = pd.to_datetime(daily["detectado_em"]).dt.date
+            daily["detectado_em_dt"] = safe_datetime_series(daily["detectado_em"])
+            daily = daily.dropna(subset=["detectado_em_dt"])
+            if daily.empty:
+                st.info("As cotações existem, mas ainda não há datas válidas para montar o gráfico.")
+                pass
+            daily["dia"] = daily["detectado_em_dt"].dt.date
             daily = daily.groupby(["dia", "rota"], as_index=False)["preço"].min()
             fig = px.line(daily, x="dia", y="preço", color="rota", markers=True)
             fig.update_layout(height=390, margin=dict(l=8, r=8, t=20, b=8), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
@@ -482,7 +504,9 @@ def render_overview(summary: dict, df: pd.DataFrame) -> None:
     if df.empty:
         st.info("As últimas cotações aparecerão aqui assim que o primeiro monitoramento rodar.")
         return
-    latest = df.sort_values("detectado_em", ascending=False).head(8)[
+    latest_source = df.copy()
+    latest_source["detectado_em_dt"] = safe_datetime_series(latest_source["detectado_em"])
+    latest = latest_source.sort_values("detectado_em_dt", ascending=False).head(8)[
         ["rota", "ida", "volta", "companhia", "preço", "moeda", "classificação", "provedor", "detectado_em"]
     ].copy()
     latest["ida"] = latest["ida"].map(format_date)
@@ -501,7 +525,8 @@ def render_opportunities(df: pd.DataFrame) -> None:
     if opportunity_df.empty:
         st.info("Nenhuma oportunidade classificada como boa, ótima ou excelente até agora.")
         return
-    ordered = opportunity_df.sort_values(["score", "economia", "detectado_em"], ascending=[False, False, False]).head(12)
+    opportunity_df["detectado_em_dt"] = safe_datetime_series(opportunity_df["detectado_em"])
+    ordered = opportunity_df.sort_values(["score", "economia", "detectado_em_dt"], ascending=[False, False, False]).head(12)
     for start in range(0, len(ordered), 3):
         cols = st.columns(3)
         for col, (_, row) in zip(cols, ordered.iloc[start:start + 3].iterrows()):
@@ -588,7 +613,9 @@ def render_history(df: pd.DataFrame) -> None:
     render_metric_cards(metrics)
     st.divider()
     chart_df = filtered.copy()
-    chart_df["detectado_em"] = pd.to_datetime(chart_df["detectado_em"])
+    chart_df["detectado_em_dt"] = safe_datetime_series(chart_df["detectado_em"])
+    chart_df = chart_df.dropna(subset=["detectado_em_dt"])
+    chart_df["detectado_em"] = chart_df["detectado_em_dt"]
     fig = px.line(chart_df.sort_values("detectado_em"), x="detectado_em", y="preço", color="rota", markers=True)
     fig.update_layout(height=420, margin=dict(l=8, r=8, t=20, b=8), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
     st.plotly_chart(fig, use_container_width=True)
