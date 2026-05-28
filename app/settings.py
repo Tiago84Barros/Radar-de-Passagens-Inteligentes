@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from functools import lru_cache
+from urllib.parse import quote_plus
 
 try:
     import streamlit as st
@@ -20,6 +21,25 @@ def _secret(name: str, default: str | None = None) -> str | None:
     return default
 
 
+def _first_secret(*names: str, default: str | None = None) -> str | None:
+    for name in names:
+        value = _secret(name)
+        if value:
+            return value
+    return default
+
+
+def _database_url_from_parts() -> str | None:
+    user = _first_secret("DB_USER", "POSTGRES_USER", "user")
+    password = _first_secret("DB_PASSWORD", "POSTGRES_PASSWORD", "password")
+    host = _first_secret("DB_HOST", "POSTGRES_HOST", "host")
+    port = _first_secret("DB_PORT", "POSTGRES_PORT", "port", default="5432")
+    dbname = _first_secret("DB_NAME", "POSTGRES_DB", "dbname", default="postgres")
+    if not all([user, password, host, port, dbname]):
+        return None
+    return f"postgresql://{quote_plus(user)}:{quote_plus(password)}@{host}:{port}/{dbname}"
+
+
 class Settings:
     database_url: str
     app_password: str | None
@@ -36,7 +56,7 @@ class Settings:
     alert_from_email: str
 
     def __init__(self) -> None:
-        self.database_url = _secret("DATABASE_URL", "sqlite:///./radar.db") or "sqlite:///./radar.db"
+        self.database_url = _secret("DATABASE_URL") or _database_url_from_parts() or "sqlite:///./radar.db"
         self.app_password = _secret("APP_PASSWORD")
         self.amadeus_client_id = _secret("AMADEUS_CLIENT_ID")
         self.amadeus_client_secret = _secret("AMADEUS_CLIENT_SECRET")

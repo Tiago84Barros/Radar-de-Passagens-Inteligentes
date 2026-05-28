@@ -7,7 +7,7 @@ import plotly.express as px
 import streamlit as st
 from sqlalchemy import func, select
 
-from app.db import AlertLog, FlightQuote, FlightSearch, init_db, session_scope
+from app.db import AlertLog, FlightQuote, FlightSearch, database_diagnostics, init_db, session_scope
 from app.monitor import run_due_searches, run_search_once
 from app.settings import get_settings
 
@@ -353,6 +353,8 @@ def main() -> None:
     except Exception as exc:  # noqa: BLE001
         st.error("Não foi possível iniciar o banco de dados.")
         st.write("Confira se o secret `DATABASE_URL` está configurado corretamente no Streamlit Cloud.")
+        st.write("Diagnóstico da conexão lida pelo app:")
+        st.json(database_diagnostics())
         st.code(str(exc), language="text")
         st.stop()
     summary = load_summary()

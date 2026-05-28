@@ -16,6 +16,17 @@ DATABASE_URL = "postgresql://..."
 APP_PASSWORD = "uma-senha-para-o-dashboard"
 ```
 
+Se preferir copiar a aba `.env` do Supabase, use estes nomes no Streamlit Cloud:
+
+```toml
+DB_USER = "postgres.seu_project_ref"
+DB_PASSWORD = "sua_senha_do_banco"
+DB_HOST = "aws-1-us-east-2.pooler.supabase.com"
+DB_PORT = "5432"
+DB_NAME = "postgres"
+APP_PASSWORD = "uma-senha-para-o-dashboard"
+```
+
 Sem `DATABASE_URL`, o app usa SQLite local. Isso serve para teste rápido, mas não persiste bem entre reinícios no Streamlit Cloud. Para uso real, use Supabase/PostgreSQL.
 
 ## Secrets opcionais

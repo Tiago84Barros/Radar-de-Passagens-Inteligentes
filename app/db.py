@@ -3,8 +3,10 @@ from __future__ import annotations
 from contextlib import contextmanager
 from datetime import datetime
 from typing import Iterator, Optional
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from sqlalchemy import Boolean, Date, DateTime, Float, Integer, String, Text, create_engine, func
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from app.settings import get_settings
@@ -79,7 +81,25 @@ class ProviderLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
-def _engine():
+_ENGINE: Engine | None = None
+_SESSION_LOCAL: sessionmaker[Session] | None = None
+
+
+def get_engine() -> Engine:
+    global _ENGINE
+    if _ENGINE is None:
+        _ENGINE = _create_engine()
+    return _ENGINE
+
+
+def get_session_local() -> sessionmaker[Session]:
+    global _SESSION_LOCAL
+    if _SESSION_LOCAL is None:
+        _SESSION_LOCAL = sessionmaker(bind=get_engine(), autoflush=False, autocommit=False, expire_on_commit=False)
+    return _SESSION_LOCAL
+
+
+def _create_engine() -> Engine:
     url = normalize_database_url(get_settings().database_url)
     connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {"connect_timeout": 10}
     return create_engine(url, pool_pre_ping=True, connect_args=connect_args)
@@ -96,17 +116,31 @@ def normalize_database_url(url: str) -> str:
     return url
 
 
-engine = _engine()
-SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+def database_diagnostics() -> dict[str, str]:
+    raw_url = get_settings().database_url
+    url = normalize_database_url(raw_url)
+    parsed = urlsplit(url)
+    query = dict(parse_qsl(parsed.query))
+    user = parsed.username or ""
+    masked_user = f"{user[:10]}..." if len(user) > 13 else user
+    return {
+        "driver": parsed.scheme or "-",
+        "user": masked_user or "-",
+        "host": parsed.hostname or "-",
+        "port": str(parsed.port or "-"),
+        "database": parsed.path.lstrip("/") or "-",
+        "sslmode": query.get("sslmode", "-"),
+        "source": "DATABASE_URL" if raw_url != "sqlite:///./radar.db" else "fallback sqlite",
+    }
 
 
 def init_db() -> None:
-    Base.metadata.create_all(bind=engine)
+    Base.metadata.create_all(bind=get_engine())
 
 
 @contextmanager
 def session_scope() -> Iterator[Session]:
-    db = SessionLocal()
+    db = get_session_local()()
     try:
         yield db
         db.commit()
