@@ -11,90 +11,14 @@ from sqlalchemy import func, select
 from app.db import AlertLog, FlightQuote, FlightSearch, database_diagnostics, init_db, session_scope
 from app.monitor import run_due_searches, run_search_once
 from app.settings import get_settings
+from app.styles import load_custom_css
 
 
 st.set_page_config(
     page_title="Radar de Passagens Inteligentes",
-    page_icon="✈️",
+    page_icon=":airplane:",
     layout="wide",
 )
-
-
-CSS = """
-<style>
-.main .block-container { padding-top: 1.25rem; max-width: 1380px; }
-[data-testid="stSidebar"] { background: #0B1220; }
-[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
-[data-testid="stSidebar"] label,
-[data-testid="stSidebar"] span { color: #D7DEE9; }
-.radar-hero {
-    border: 1px solid rgba(20,184,166,.26);
-    background: linear-gradient(135deg, rgba(20,184,166,.12), rgba(59,130,246,.08));
-    border-radius: 8px;
-    padding: 20px 22px;
-    margin-bottom: 18px;
-}
-.radar-title { color: #F8FAFC; font-size: 1.78rem; font-weight: 900; margin: 0; letter-spacing: 0; }
-.radar-subtitle { color: #AEB8C8; margin-top: 7px; line-height: 1.5; }
-.demo-banner {
-    border: 1px solid rgba(245,158,11,.32);
-    background: rgba(245,158,11,.10);
-    color: #FCD34D;
-    border-radius: 8px;
-    padding: 10px 12px;
-    font-weight: 750;
-    margin-bottom: 14px;
-}
-.metric-card {
-    border: 1px solid #253248;
-    background: #101827;
-    border-radius: 8px;
-    padding: 15px 16px;
-    min-height: 116px;
-}
-.metric-label { color: #8EA0B8; font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; font-weight: 850; }
-.metric-value { color: #F8FAFC; font-size: 1.58rem; font-weight: 950; margin-top: 8px; }
-.metric-help { color: #718096; font-size: .82rem; margin-top: 5px; }
-.opportunity-card {
-    border: 1px solid #253248;
-    background: #0F172A;
-    border-radius: 8px;
-    padding: 16px;
-    min-height: 292px;
-}
-.opportunity-route { color: #F8FAFC; font-weight: 900; font-size: 1.05rem; margin-top: 9px; }
-.opportunity-price { color: #13C8A3; font-weight: 950; font-size: 1.38rem; margin-top: 8px; }
-.opportunity-detail { color: #AEB8C8; font-size: .84rem; margin-top: 6px; line-height: 1.38; }
-.tag {
-    display:inline-block;
-    padding: 4px 8px;
-    border-radius: 999px;
-    background: rgba(20,184,166,.14);
-    color: #7EF5D8;
-    font-size: .7rem;
-    font-weight: 850;
-}
-.tag-muted { background: rgba(148,163,184,.13); color: #CBD5E1; }
-.tag-alert { background: rgba(34,197,94,.14); color: #86EFAC; }
-.tag-demo { background: rgba(245,158,11,.16); color: #FCD34D; }
-.status-row {
-    display: flex;
-    justify-content: space-between;
-    gap: 10px;
-    border-bottom: 1px solid rgba(148,163,184,.16);
-    padding: 7px 0;
-    font-size: .84rem;
-}
-.status-label { color: #91A0B5; }
-.status-value { color: #F8FAFC; font-weight: 800; text-align: right; }
-.section-note { color: #94A3B8; font-size: .9rem; margin-bottom: 10px; }
-a.buy-link {
-    color: #93C5FD !important;
-    font-weight: 850;
-    text-decoration: none;
-}
-</style>
-"""
 
 
 FLEXIBILITY_OPTIONS = {
@@ -119,10 +43,10 @@ def require_password() -> None:
         return
     if st.session_state.get("authenticated"):
         return
-    st.markdown(CSS, unsafe_allow_html=True)
+    load_custom_css()
     st.markdown(
-        '<div class="radar-hero"><p class="radar-title">Radar de Passagens Inteligentes</p>'
-        '<div class="radar-subtitle">Acesso protegido para o dashboard.</div></div>',
+        '<div class="top-shell"><div><p class="radar-title">Radar de Passagens Inteligentes</p>'
+        '<div class="radar-subtitle">Acesso protegido para o dashboard.</div></div></div>',
         unsafe_allow_html=True,
     )
     password = st.text_input("Senha do app", type="password")
@@ -272,6 +196,7 @@ def searches_df(searches: list[FlightSearch], df_quotes: pd.DataFrame) -> pd.Dat
                 "frequência": frequency_label(search.frequency_minutes),
                 "última consulta": search.last_checked_at,
                 "menor preço encontrado": lowest_by_search.get(search.id),
+                "ação": "Pausar" if search.is_active else "Reativar",
             }
             for search in searches
         ]
@@ -313,13 +238,17 @@ def build_metrics(summary: dict, df: pd.DataFrame) -> dict[str, Any]:
         "alerts": summary["alerts"],
         "lowest_24h": None if recent.empty else recent["preço"].min(),
         "economy": positive_economy,
-        "classified": 0 if df.empty else int(df["oportunidade"].isin(classified).sum()),
+        "opportunities": 0 if df.empty else int(df["oportunidade"].isin(classified).sum()),
         "latest_search": summary["latest_search"],
     }
 
 
+def status_badge(label: str, status: str = "neutral") -> str:
+    return f'<span class="status-pill status-{status}">{label}</span>'
+
+
 def render_header(provider_status: dict[str, Any]) -> None:
-    st.markdown(CSS, unsafe_allow_html=True)
+    load_custom_css()
     if provider_status["demo_mode"]:
         st.markdown(
             '<div class="demo-banner">Modo demo ativo: nenhuma API real de passagens está configurada. '
@@ -327,12 +256,19 @@ def render_header(provider_status: dict[str, Any]) -> None:
             unsafe_allow_html=True,
         )
     st.markdown(
-        """
-        <div class="radar-hero">
-            <p class="radar-title">Radar de Passagens Inteligentes</p>
-            <div class="radar-subtitle">
-                A sidebar concentra o painel de controle. A área principal mostra resultados, oportunidades,
-                histórico e análise de custo-benefício das passagens monitoradas.
+        f"""
+        <div class="top-shell">
+            <div>
+                <div class="top-kicker">Monitoramento de tarifas aéreas</div>
+                <p class="radar-title">Radar de Passagens Inteligentes</p>
+                <div class="radar-subtitle">
+                    Monitore rotas, detecte quedas de preço e receba alertas automáticos.
+                </div>
+            </div>
+            <div class="hero-status">
+                <div class="hero-status-title">Status operacional</div>
+                {status_badge("Modo demo", "warn") if provider_status["demo_mode"] else status_badge("API real", "ok")}
+                <div class="opportunity-detail">Provider: {provider_status["provider_label"]}</div>
             </div>
         </div>
         """,
@@ -340,27 +276,46 @@ def render_header(provider_status: dict[str, Any]) -> None:
     )
 
 
-def render_metric_cards(values: list[tuple[str, Any, str]], per_row: int = 4) -> None:
+def render_metric_cards(values: list[tuple], per_row: int = 4) -> None:
     for start in range(0, len(values), per_row):
         cols = st.columns(min(per_row, len(values) - start))
-        for col, (label, value, help_text) in zip(cols, values[start:start + per_row]):
+        for col, metric in zip(cols, values[start:start + per_row]):
+            label, value, help_text = metric[:3]
+            indicator = metric[3] if len(metric) > 3 else "Atualizado"
             col.markdown(
                 f"""
                 <div class="metric-card">
                     <div class="metric-label">{label}</div>
                     <div class="metric-value">{value}</div>
                     <div class="metric-help">{help_text}</div>
+                    <div class="metric-indicator">{indicator}</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
 
 
+def render_top_metrics(summary: dict, df: pd.DataFrame) -> None:
+    metrics = build_metrics(summary, df)
+    render_metric_cards(
+        [
+            ("Buscas ativas", metrics["active"], "Rotinas em monitoramento", "Online"),
+            ("Menor preço 24h", money(metrics["lowest_24h"]), "Cotação mínima recente", "24h"),
+            ("Oportunidades", metrics["opportunities"], "Boas, ótimas e excelentes", "Score ativo"),
+            ("Alertas enviados", metrics["alerts"], "Telegram/e-mail ou mock", "Histórico"),
+            ("Economia potencial", money(metrics["economy"]), "Soma vs. preço máximo", "Estimado"),
+            ("Última execução", format_datetime(metrics["latest_search"]), "Robô de busca", "Monitor"),
+        ],
+        per_row=3,
+    )
+
+
 def render_sidebar(summary: dict, provider_status: dict[str, Any], db_connected: bool) -> None:
     settings = get_settings()
     with st.sidebar:
-        st.title("Painel de controle")
-        st.subheader("Nova busca de passagem")
+        st.title("Radar de Passagens")
+        st.caption("Painel de controle")
+        st.subheader("Nova busca")
         with st.form("new_search_form", clear_on_submit=False):
             origin = st.text_input("Partida/origem", "GRU").strip().upper()
             destination = st.text_input("Destino", "LIS").strip().upper()
@@ -376,7 +331,7 @@ def render_sidebar(summary: dict, provider_status: dict[str, Any], db_connected:
             currency = st.selectbox("Moeda", ["BRL", "USD", "EUR"])
             flexibility = st.selectbox("Flexibilidade de datas", list(FLEXIBILITY_OPTIONS.keys()))
             frequency_label_selected = st.selectbox("Frequência de busca automática", list(FREQUENCY_OPTIONS.keys()), index=1)
-            telegram_enabled = st.toggle("Ativar alerta no Telegram", value=bool(settings.telegram_bot_token and settings.telegram_chat_id))
+            telegram_enabled = st.toggle("Ativar alerta Telegram", value=bool(settings.telegram_bot_token and settings.telegram_chat_id))
             submitted = st.form_submit_button("Iniciar monitoramento", type="primary", use_container_width=True)
 
         if submitted:
@@ -405,14 +360,14 @@ def render_sidebar(summary: dict, provider_status: dict[str, Any], db_connected:
                 st.rerun()
 
         st.divider()
-        st.subheader("Status do radar")
+        st.subheader("Status do sistema")
         telegram_ok = bool(settings.telegram_bot_token and settings.telegram_chat_id)
         status_rows = [
-            ("Banco", "Conectado" if db_connected else "Indisponível"),
-            ("Modo", "Demo" if provider_status["demo_mode"] else "API real"),
+            ("Banco conectado", "Sim" if db_connected else "Não"),
             ("Provider ativo", provider_status["provider_label"]),
-            ("Telegram", "Configurado" if telegram_ok else "Não configurado"),
-            ("Última busca", format_datetime(summary.get("latest_search"))),
+            ("Modo", "Demo" if provider_status["demo_mode"] else "API real"),
+            ("Telegram configurado", "Sim" if telegram_ok else "Não"),
+            ("Última busca executada", format_datetime(summary.get("latest_search"))),
             ("Buscas ativas", summary["active"]),
         ]
         for label, value in status_rows:
@@ -430,22 +385,22 @@ def render_sidebar(summary: dict, provider_status: dict[str, Any], db_connected:
 
 
 def render_overview(summary: dict, df: pd.DataFrame) -> None:
-    metrics = build_metrics(summary, df)
-    render_metric_cards(
-        [
-            ("Buscas ativas", metrics["active"], "Rotinas em monitoramento"),
-            ("Menor preço 24h", money(metrics["lowest_24h"]), "Cotação mínima recente"),
-            ("Alertas enviados", metrics["alerts"], "Telegram/e-mail ou mock"),
-            ("Economia potencial", money(metrics["economy"]), "Soma vs. preço máximo"),
-            ("Boas ou melhores", metrics["classified"], "Boas, ótimas e excelentes"),
-            ("Última execução", format_datetime(metrics["latest_search"]), "Robô de busca"),
-        ],
-        per_row=3,
+    st.subheader("Resumo do radar")
+    st.markdown(
+        f"""
+        <div class="soft-card">
+            <div class="section-note">
+                O radar acompanha {summary["routes"]} rota(s), mantém {summary["active"]} busca(s) ativa(s)
+                e registrou {len(df)} cotação(ões) recentes para análise.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
-    st.divider()
+    st.write("")
     left, right = st.columns([1.35, 1])
     with left:
-        st.subheader("Evolução de preço por rota")
+        st.subheader("Evolução geral de preços")
         if df.empty:
             st.info("Ainda não há cotações. Crie uma busca na sidebar para gerar histórico.")
         else:
@@ -456,7 +411,7 @@ def render_overview(summary: dict, df: pd.DataFrame) -> None:
             fig.update_layout(height=390, margin=dict(l=8, r=8, t=20, b=8), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
             st.plotly_chart(fig, use_container_width=True)
     with right:
-        st.subheader("Comparação entre providers")
+        st.subheader("Status por provider")
         if df.empty:
             st.info("Sem dados de providers ainda.")
         else:
@@ -464,6 +419,17 @@ def render_overview(summary: dict, df: pd.DataFrame) -> None:
             fig = px.bar(providers, x="provedor", y=["preço_min", "preço_médio"], barmode="group")
             fig.update_layout(height=390, margin=dict(l=8, r=8, t=20, b=8), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
             st.plotly_chart(fig, use_container_width=True)
+    st.subheader("Últimas cotações")
+    if df.empty:
+        st.info("As últimas cotações aparecerão aqui assim que o primeiro monitoramento rodar.")
+        return
+    latest = df.sort_values("detectado_em", ascending=False).head(8)[
+        ["rota", "ida", "volta", "companhia", "preço", "moeda", "classificação", "provedor", "detectado_em"]
+    ].copy()
+    latest["ida"] = latest["ida"].map(format_date)
+    latest["volta"] = latest["volta"].map(format_date)
+    latest["detectado_em"] = latest["detectado_em"].map(format_datetime)
+    st.dataframe(latest, use_container_width=True, hide_index=True)
 
 
 def render_opportunities(df: pd.DataFrame) -> None:
@@ -471,17 +437,27 @@ def render_opportunities(df: pd.DataFrame) -> None:
     if df.empty:
         st.info("Nenhuma passagem encontrada ainda. Use a sidebar para iniciar um monitoramento.")
         return
-    ordered = df.sort_values(["score", "economia", "detectado_em"], ascending=[False, False, False]).head(12)
+    opportunity_df = df[df["oportunidade"] != "normal"].copy()
+    if opportunity_df.empty:
+        st.info("Nenhuma oportunidade classificada como boa, ótima ou excelente até agora.")
+        return
+    ordered = opportunity_df.sort_values(["score", "economia", "detectado_em"], ascending=[False, False, False]).head(12)
     for start in range(0, len(ordered), 3):
         cols = st.columns(3)
         for col, (_, row) in zip(cols, ordered.iloc[start:start + 3].iterrows()):
             alert_label = "Alerta enviado" if row["alerta"] not in {"-", "failed"} and not str(row["alerta"]).startswith("failed") else "Sem alerta"
             alert_class = "tag-alert" if alert_label == "Alerta enviado" else "tag-muted"
             economy = row["economia"] if row["economia"] is not None else 0
+            card_class = "opportunity-card excellent" if row["oportunidade"] in {"excelente_oportunidade", "oportunidade_rara"} else "opportunity-card"
+            tag_class = {
+                "boa_oportunidade": "tag-good",
+                "excelente_oportunidade": "tag-excellent",
+                "oportunidade_rara": "tag-great",
+            }.get(row["oportunidade"], "tag-muted")
             col.markdown(
                 f"""
-                <div class="opportunity-card">
-                    <span class="tag">{row['classificação']}</span>
+                <div class="{card_class}">
+                    <span class="tag {tag_class}">{row['classificação']}</span>
                     <span class="tag {alert_class}">{alert_label}</span>
                     <div class="opportunity-route">{row['rota']}</div>
                     <div class="opportunity-detail">Ida: {format_date(row['ida'])} · Volta: {format_date(row['volta'])}</div>
@@ -565,17 +541,24 @@ def render_settings(provider_status: dict[str, Any], db_connected: bool) -> None
     settings = get_settings()
     st.subheader("Configurações operacionais")
     st.markdown('<p class="section-note">Valores sensíveis não são exibidos. Apenas o status de configuração aparece aqui.</p>', unsafe_allow_html=True)
+    db_source = database_diagnostics().get("source")
+    database_configured = db_source == "DATABASE_URL"
     provider_rows = [
-        {"item": "Provider ativo", "status": provider_status["provider_label"]},
-        {"item": "Modo", "status": "Demo" if provider_status["demo_mode"] else "API real"},
-        {"item": "Banco", "status": "Conectado" if db_connected else "Indisponível"},
-        {"item": "Amadeus", "status": "Configurado" if provider_status["providers"]["Amadeus"] else "Pendente"},
-        {"item": "Kiwi/Tequila", "status": "Configurado" if provider_status["providers"]["Kiwi/Tequila"] else "Pendente"},
-        {"item": "TravelPayouts", "status": "Configurado" if provider_status["providers"]["TravelPayouts"] else "Pendente"},
-        {"item": "Telegram", "status": "Configurado" if settings.telegram_bot_token and settings.telegram_chat_id else "Pendente"},
+        {"configuração": "DATABASE_URL", "status": "Configurado" if database_configured else "Não configurado"},
+        {"configuração": "AMADEUS_CLIENT_ID", "status": "Configurado" if settings.amadeus_client_id else "Não configurado"},
+        {"configuração": "AMADEUS_CLIENT_SECRET", "status": "Configurado" if settings.amadeus_client_secret else "Não configurado"},
+        {"configuração": "TELEGRAM_BOT_TOKEN", "status": "Configurado" if settings.telegram_bot_token else "Não configurado"},
+        {"configuração": "TELEGRAM_CHAT_ID", "status": "Configurado" if settings.telegram_chat_id else "Não configurado"},
+        {"configuração": "Provider ativo", "status": provider_status["provider_label"]},
+        {"configuração": "Modo atual", "status": "Demo" if provider_status["demo_mode"] else "API real"},
+        {"configuração": "Banco", "status": "Conectado" if db_connected else "Indisponível"},
     ]
     st.dataframe(pd.DataFrame(provider_rows), use_container_width=True, hide_index=True)
-    st.markdown("**Secrets necessários**")
+    st.markdown("**Como configurar secrets**")
+    st.markdown(
+        "Configure os secrets no Streamlit Cloud e também em `Settings > Secrets and variables > Actions` "
+        "no GitHub para o robô agendado. O app nunca mostra os valores, apenas se eles existem."
+    )
     st.code(
         """DATABASE_URL
 APP_PASSWORD
@@ -605,7 +588,7 @@ def main() -> None:
         seed_if_empty()
     except Exception as exc:  # noqa: BLE001
         db_connected = False
-        st.markdown(CSS, unsafe_allow_html=True)
+        load_custom_css()
         st.error("Não foi possível iniciar o banco de dados.")
         st.write("Confira se o secret `DATABASE_URL` está configurado corretamente no Streamlit Cloud.")
         st.write("Diagnóstico da conexão lida pelo app:")
@@ -617,6 +600,8 @@ def main() -> None:
     render_sidebar(summary, provider_status, db_connected)
     render_header(provider_status)
     df_quotes = quotes_df(summary["quotes"], summary["searches"], summary["latest_alert_by_quote"])
+    render_top_metrics(summary, df_quotes)
+    st.write("")
 
     tab_overview, tab_opportunities, tab_searches, tab_history, tab_settings = st.tabs(
         ["Visão Geral", "Oportunidades", "Buscas Ativas", "Histórico de Preços", "Configurações"]
