@@ -11,7 +11,13 @@ from sqlalchemy import func, select
 from app.deals import calculate_deal_score
 from app.db import AlertLog, FlightQuote, FlightSearch, ProviderLog, database_diagnostics, init_db, session_scope
 from app.formatting import format_brl
-from app.location_resolver import LocationResolution, resolve_location, search_locations
+from app.location_resolver import LocationResolution, resolve_location
+try:
+    from app.location_resolver import search_locations as resolver_search_locations
+except ImportError:  # pragma: no cover - keeps older deployments alive during cache refresh.
+    def resolver_search_locations(value: str) -> list[LocationResolution]:
+        location = resolve_location(value)
+        return [location] if location else []
 from app.monitor import run_due_searches, run_search_once
 from app.settings import get_settings
 from app.styles import load_custom_css
@@ -417,7 +423,7 @@ def _render_location_picker(label: str, key: str) -> tuple[str, LocationResoluti
         st.caption("Digite para ver os aeroportos e codigos disponiveis.")
         return query, None
 
-    options = search_locations(query)
+    options = resolver_search_locations(query)
     if not options:
         st.caption("Nenhum aeroporto encontrado para esse texto.")
         return query, None
