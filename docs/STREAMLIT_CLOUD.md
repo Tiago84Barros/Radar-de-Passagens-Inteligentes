@@ -34,6 +34,7 @@ Sem `DATABASE_URL`, o app usa SQLite local. Isso serve para teste rápido, mas n
 ```toml
 AMADEUS_CLIENT_ID = ""
 AMADEUS_CLIENT_SECRET = ""
+AMADEUS_ENV = "test"
 KIWI_API_KEY = ""
 TRAVELPAYOUTS_TOKEN = ""
 

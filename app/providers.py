@@ -5,6 +5,7 @@ from datetime import date, timedelta
 from random import Random
 
 from app.settings import get_settings
+from services.amadeus_provider import AmadeusProvider
 
 
 @dataclass(frozen=True)
@@ -52,7 +53,26 @@ def search_amadeus(query: dict) -> list[FlightOffer]:
     settings = get_settings()
     if not settings.amadeus_client_id or not settings.amadeus_client_secret:
         return _mock_offers("amadeus_mock", query, 1450)
-    return _mock_offers("amadeus_ready", query, 1450)
+    try:
+        offers = AmadeusProvider().search_flights(query)
+    except Exception:  # noqa: BLE001
+        return _mock_offers("amadeus_error_mock", query, 1450)
+    return [
+        FlightOffer(
+            origin=offer["origin"],
+            destination=offer["destination"],
+            departure_date=offer["departure_date"],
+            return_date=offer["return_date"],
+            airline=offer["airline"],
+            price=offer["price"],
+            currency=offer["currency"],
+            duration_minutes=offer["duration_minutes"],
+            stops=offer["stops"],
+            booking_link=offer["booking_link"],
+            provider=offer["provider"],
+        )
+        for offer in offers
+    ] or _mock_offers("amadeus_empty_mock", query, 1450)
 
 
 def search_kiwi(query: dict) -> list[FlightOffer]:

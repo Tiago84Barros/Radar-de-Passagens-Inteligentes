@@ -10,7 +10,8 @@ except Exception:  # pragma: no cover
     st = None
 
 
-def _secret(name: str, default: str | None = None) -> str | None:
+def get_config_value(name: str, default: str | None = None) -> str | None:
+    """Read one config value from environment variables or Streamlit secrets."""
     if os.getenv(name):
         return os.getenv(name)
     if st is not None:
@@ -23,7 +24,7 @@ def _secret(name: str, default: str | None = None) -> str | None:
 
 def _first_secret(*names: str, default: str | None = None) -> str | None:
     for name in names:
-        value = _secret(name)
+        value = get_config_value(name)
         if value:
             return value
     return default
@@ -45,6 +46,7 @@ class Settings:
     app_password: str | None
     amadeus_client_id: str | None
     amadeus_client_secret: str | None
+    amadeus_env: str
     kiwi_api_key: str | None
     travelpayouts_token: str | None
     telegram_bot_token: str | None
@@ -56,19 +58,25 @@ class Settings:
     alert_from_email: str
 
     def __init__(self) -> None:
-        self.database_url = _secret("DATABASE_URL") or _database_url_from_parts() or "sqlite:///./radar.db"
-        self.app_password = _secret("APP_PASSWORD")
-        self.amadeus_client_id = _secret("AMADEUS_CLIENT_ID")
-        self.amadeus_client_secret = _secret("AMADEUS_CLIENT_SECRET")
-        self.kiwi_api_key = _secret("KIWI_API_KEY")
-        self.travelpayouts_token = _secret("TRAVELPAYOUTS_TOKEN")
-        self.telegram_bot_token = _secret("TELEGRAM_BOT_TOKEN")
-        self.telegram_chat_id = _secret("TELEGRAM_CHAT_ID")
-        self.smtp_host = _secret("SMTP_HOST")
-        self.smtp_port = int(_secret("SMTP_PORT", "587") or "587")
-        self.smtp_user = _secret("SMTP_USER")
-        self.smtp_password = _secret("SMTP_PASSWORD")
-        self.alert_from_email = _secret("ALERT_FROM_EMAIL", "alerts@radar.local") or "alerts@radar.local"
+        self.database_url = get_config_value("DATABASE_URL") or _database_url_from_parts() or "sqlite:///./radar.db"
+        self.app_password = get_config_value("APP_PASSWORD")
+        self.amadeus_client_id = get_config_value("AMADEUS_CLIENT_ID")
+        self.amadeus_client_secret = get_config_value("AMADEUS_CLIENT_SECRET")
+        self.amadeus_env = _normalize_amadeus_env(get_config_value("AMADEUS_ENV", "test") or "test")
+        self.kiwi_api_key = get_config_value("KIWI_API_KEY")
+        self.travelpayouts_token = get_config_value("TRAVELPAYOUTS_TOKEN")
+        self.telegram_bot_token = get_config_value("TELEGRAM_BOT_TOKEN")
+        self.telegram_chat_id = get_config_value("TELEGRAM_CHAT_ID")
+        self.smtp_host = get_config_value("SMTP_HOST")
+        self.smtp_port = int(get_config_value("SMTP_PORT", "587") or "587")
+        self.smtp_user = get_config_value("SMTP_USER")
+        self.smtp_password = get_config_value("SMTP_PASSWORD")
+        self.alert_from_email = get_config_value("ALERT_FROM_EMAIL", "alerts@radar.local") or "alerts@radar.local"
+
+
+def _normalize_amadeus_env(value: str) -> str:
+    env = value.strip().lower()
+    return env if env in {"test", "production"} else "test"
 
 
 @lru_cache

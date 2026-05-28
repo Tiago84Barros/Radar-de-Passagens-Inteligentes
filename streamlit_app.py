@@ -12,6 +12,7 @@ from app.db import AlertLog, FlightQuote, FlightSearch, database_diagnostics, in
 from app.monitor import run_due_searches, run_search_once
 from app.settings import get_settings
 from app.styles import load_custom_css
+from services.amadeus_provider import AmadeusProvider, AmadeusConfigurationError, AmadeusConnectionError
 
 
 st.set_page_config(
@@ -114,6 +115,7 @@ def get_provider_status(settings) -> dict[str, Any]:
         "active_names": active,
         "provider_label": ", ".join(active) if active else "Mocks internos",
         "demo_mode": not bool(active),
+        "amadeus_env": settings.amadeus_env,
     }
 
 
@@ -251,8 +253,7 @@ def render_header(provider_status: dict[str, Any]) -> None:
     load_custom_css()
     if provider_status["demo_mode"]:
         st.markdown(
-            '<div class="demo-banner">Modo demo ativo: nenhuma API real de passagens está configurada. '
-            "As cotações exibidas são simuladas.</div>",
+            '<div class="demo-banner">Modo demonstração: configure a Amadeus para buscar passagens reais.</div>',
             unsafe_allow_html=True,
         )
     st.markdown(
@@ -366,6 +367,7 @@ def render_sidebar(summary: dict, provider_status: dict[str, Any], db_connected:
             ("Banco conectado", "Sim" if db_connected else "Não"),
             ("Provider ativo", provider_status["provider_label"]),
             ("Modo", "Demo" if provider_status["demo_mode"] else "API real"),
+            ("Ambiente Amadeus", provider_status["amadeus_env"]),
             ("Telegram configurado", "Sim" if telegram_ok else "Não"),
             ("Última busca executada", format_datetime(summary.get("latest_search"))),
             ("Buscas ativas", summary["active"]),
@@ -547,6 +549,7 @@ def render_settings(provider_status: dict[str, Any], db_connected: bool) -> None
         {"configuração": "DATABASE_URL", "status": "Configurado" if database_configured else "Não configurado"},
         {"configuração": "AMADEUS_CLIENT_ID", "status": "Configurado" if settings.amadeus_client_id else "Não configurado"},
         {"configuração": "AMADEUS_CLIENT_SECRET", "status": "Configurado" if settings.amadeus_client_secret else "Não configurado"},
+        {"configuração": "AMADEUS_ENV", "status": settings.amadeus_env},
         {"configuração": "TELEGRAM_BOT_TOKEN", "status": "Configurado" if settings.telegram_bot_token else "Não configurado"},
         {"configuração": "TELEGRAM_CHAT_ID", "status": "Configurado" if settings.telegram_chat_id else "Não configurado"},
         {"configuração": "Provider ativo", "status": provider_status["provider_label"]},
@@ -554,16 +557,44 @@ def render_settings(provider_status: dict[str, Any], db_connected: bool) -> None
         {"configuração": "Banco", "status": "Conectado" if db_connected else "Indisponível"},
     ]
     st.dataframe(pd.DataFrame(provider_rows), use_container_width=True, hide_index=True)
+    if st.button("Testar conexão com Amadeus", type="primary"):
+        provider = AmadeusProvider()
+        try:
+            provider.get_access_token()
+        except AmadeusConfigurationError:
+            st.warning("Configure AMADEUS_CLIENT_ID e AMADEUS_CLIENT_SECRET antes de testar a conexão.")
+        except (AmadeusConnectionError, Exception):
+            st.error("Não foi possível conectar à Amadeus. Confira o ambiente e as credenciais configuradas.")
+        else:
+            st.success("Conexão com Amadeus realizada com sucesso.")
     st.markdown("**Como configurar secrets**")
     st.markdown(
         "Configure os secrets no Streamlit Cloud e também em `Settings > Secrets and variables > Actions` "
         "no GitHub para o robô agendado. O app nunca mostra os valores, apenas se eles existem."
     )
+    st.markdown("**Para ativar a API Amadeus:**")
+    st.markdown(
+        """
+1. Crie uma conta no Amadeus for Developers.
+2. Crie um app em My Apps.
+3. Copie o Client ID e Client Secret.
+4. No Streamlit Cloud, vá em App > Settings > Secrets.
+5. Adicione:
+        """
+    )
+    st.code(
+        """AMADEUS_CLIENT_ID = "seu_client_id"
+AMADEUS_CLIENT_SECRET = "seu_client_secret"
+AMADEUS_ENV = "test" """,
+        language="toml",
+    )
+    st.markdown("6. Salve e reinicie o app.")
     st.code(
         """DATABASE_URL
 APP_PASSWORD
 AMADEUS_CLIENT_ID
 AMADEUS_CLIENT_SECRET
+AMADEUS_ENV
 KIWI_API_KEY
 TRAVELPAYOUTS_TOKEN
 TELEGRAM_BOT_TOKEN

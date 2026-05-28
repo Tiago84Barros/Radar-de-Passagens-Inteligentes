@@ -18,6 +18,7 @@ def _query_from_search(search: FlightSearch) -> dict:
         "return_date": search.return_date,
         "passengers": search.passengers,
         "currency": search.currency,
+        "max_price": search.max_price,
         "baggage_included": search.baggage_included,
     }
 
