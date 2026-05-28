@@ -598,33 +598,6 @@ def render_overview(summary: dict, df: pd.DataFrame) -> None:
         unsafe_allow_html=True,
     )
     st.write("")
-    left, right = st.columns([1.35, 1])
-    with left:
-        st.subheader("Evolução geral de preços")
-        if df.empty:
-            st.info("Ainda não há cotações. Crie uma busca na sidebar para gerar histórico.")
-        else:
-            daily = df.copy()
-            daily["detectado_em_dt"] = safe_datetime_series(daily["detectado_em"])
-            daily = daily.dropna(subset=["detectado_em_dt"])
-            if daily.empty:
-                st.info("As cotações existem, mas ainda não há datas válidas para montar o gráfico.")
-                daily = pd.DataFrame()
-            if not daily.empty:
-                daily["dia"] = daily["detectado_em_dt"].dt.date
-                daily = daily.groupby(["dia", "rota"], as_index=False)["preço"].min()
-                fig = px.line(daily, x="dia", y="preço", color="rota", markers=True)
-                fig.update_layout(height=390, margin=dict(l=8, r=8, t=20, b=8), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-                st.plotly_chart(fig, use_container_width=True)
-    with right:
-        st.subheader("Status por provider")
-        if df.empty:
-            st.info("Sem dados de providers ainda.")
-        else:
-            providers = df.groupby("provedor", as_index=False).agg(preço_min=("preço", "min"), preço_médio=("preço", "mean"))
-            fig = px.bar(providers, x="provedor", y=["preço_min", "preço_médio"], barmode="group")
-            fig.update_layout(height=390, margin=dict(l=8, r=8, t=20, b=8), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-            st.plotly_chart(fig, use_container_width=True)
     st.subheader("Últimas cotações")
     if df.empty:
         st.info("As últimas cotações aparecerão aqui assim que o primeiro monitoramento rodar.")
@@ -879,8 +852,6 @@ def main() -> None:
     df_quotes = quotes_df(summary["quotes"], summary["searches"], summary["latest_alert_by_quote"])
     real_df_quotes = filter_real_quotes_df(df_quotes)
     render_year_price_calendar(summary, real_df_quotes)
-    st.write("")
-    render_top_metrics(summary, real_df_quotes)
     st.write("")
 
     tab_overview, tab_opportunities, tab_searches, tab_history, tab_settings = st.tabs(
