@@ -6,17 +6,17 @@ import streamlit as st
 CSS = """
 <style>
 :root {
-    --radar-bg: #F6F8FB;
-    --radar-panel: #FFFFFF;
-    --radar-panel-soft: #F8FAFC;
-    --radar-ink: #0F172A;
-    --radar-muted: #64748B;
-    --radar-line: #E2E8F0;
-    --radar-teal: #0F766E;
-    --radar-teal-soft: #CCFBF1;
-    --radar-blue: #2563EB;
-    --radar-amber: #B45309;
-    --radar-green: #15803D;
+    --radar-bg: #08111F;
+    --radar-panel: #0F1B2D;
+    --radar-panel-soft: #13233A;
+    --radar-ink: #F8FAFC;
+    --radar-muted: #9AA8BC;
+    --radar-line: rgba(148,163,184,.20);
+    --radar-teal: #2DD4BF;
+    --radar-teal-soft: rgba(45,212,191,.14);
+    --radar-blue: #93C5FD;
+    --radar-amber: #FBBF24;
+    --radar-green: #86EFAC;
 }
 
 .stApp { background: var(--radar-bg); color: var(--radar-ink); }
@@ -27,7 +27,7 @@ CSS = """
 }
 
 [data-testid="stSidebar"] {
-    background: #0F172A;
+    background: #0A1220;
     border-right: 1px solid rgba(148,163,184,.20);
 }
 [data-testid="stSidebar"] h1,
@@ -70,11 +70,11 @@ CSS = """
     justify-content: space-between;
     gap: 18px;
     border: 1px solid var(--radar-line);
-    background: linear-gradient(135deg, #FFFFFF 0%, #F8FAFC 62%, #EEF6FF 100%);
+    background: linear-gradient(135deg, #0F1B2D 0%, #10243A 58%, #0A1D2F 100%);
     border-radius: 12px;
     padding: 22px 24px;
     margin-bottom: 16px;
-    box-shadow: 0 12px 34px rgba(15,23,42,.06);
+    box-shadow: 0 18px 42px rgba(0,0,0,.28);
 }
 .top-kicker {
     color: var(--radar-teal);
@@ -100,7 +100,7 @@ CSS = """
 .hero-status {
     min-width: 240px;
     border: 1px solid var(--radar-line);
-    background: rgba(255,255,255,.80);
+    background: rgba(8,17,31,.62);
     border-radius: 10px;
     padding: 13px 14px;
 }
@@ -114,9 +114,9 @@ CSS = """
 }
 
 .demo-banner {
-    border: 1px solid rgba(180,83,9,.22);
-    background: #FFFBEB;
-    color: #92400E;
+    border: 1px solid rgba(251,191,36,.32);
+    background: rgba(251,191,36,.11);
+    color: #FDE68A;
     border-radius: 10px;
     padding: 11px 13px;
     font-weight: 750;
@@ -129,7 +129,7 @@ CSS = """
     border-radius: 12px;
     padding: 16px 17px;
     min-height: 118px;
-    box-shadow: 0 10px 28px rgba(15,23,42,.055);
+    box-shadow: 0 16px 34px rgba(0,0,0,.22);
 }
 .metric-label {
     color: var(--radar-muted);
@@ -167,7 +167,7 @@ CSS = """
     background: var(--radar-panel);
     border-radius: 12px;
     padding: 16px;
-    box-shadow: 0 10px 28px rgba(15,23,42,.045);
+    box-shadow: 0 16px 34px rgba(0,0,0,.18);
 }
 .section-note {
     color: var(--radar-muted);
@@ -181,11 +181,11 @@ CSS = """
     border-radius: 12px;
     padding: 16px;
     min-height: 308px;
-    box-shadow: 0 10px 28px rgba(15,23,42,.055);
+    box-shadow: 0 16px 34px rgba(0,0,0,.22);
 }
 .opportunity-card.excellent {
-    border-color: rgba(15,118,110,.36);
-    background: linear-gradient(180deg, #FFFFFF 0%, #F0FDFA 100%);
+    border-color: rgba(45,212,191,.42);
+    background: linear-gradient(180deg, #10243A 0%, #0D2A31 100%);
 }
 .opportunity-route {
     color: var(--radar-ink);
@@ -211,18 +211,18 @@ CSS = """
     align-items:center;
     padding: 4px 8px;
     border-radius: 999px;
-    background: #E0F2FE;
-    color: #075985;
+    background: rgba(147,197,253,.16);
+    color: #BFDBFE;
     font-size: .72rem;
     font-weight: 850;
 }
-.tag-muted { background: #F1F5F9; color: #475569; }
-.tag-alert { background: #DCFCE7; color: #166534; }
-.tag-demo { background: #FEF3C7; color: #92400E; }
-.tag-good { background: #E0F2FE; color: #075985; }
-.tag-great { background: #CCFBF1; color: #115E59; }
-.tag-excellent { background: #DBEAFE; color: #1D4ED8; }
-.tag-danger { background: #FEE2E2; color: #991B1B; }
+.tag-muted { background: rgba(148,163,184,.14); color: #CBD5E1; }
+.tag-alert { background: rgba(134,239,172,.15); color: #BBF7D0; }
+.tag-demo { background: rgba(251,191,36,.16); color: #FDE68A; }
+.tag-good { background: rgba(147,197,253,.16); color: #BFDBFE; }
+.tag-great { background: rgba(45,212,191,.16); color: #99F6E4; }
+.tag-excellent { background: rgba(96,165,250,.18); color: #BFDBFE; }
+.tag-danger { background: rgba(248,113,113,.16); color: #FECACA; }
 
 .status-row {
     display: flex;
@@ -243,10 +243,10 @@ CSS = """
     font-size: .74rem;
     font-weight: 850;
 }
-.status-ok { background: #DCFCE7; color: #166534; }
-.status-warn { background: #FEF3C7; color: #92400E; }
-.status-info { background: #DBEAFE; color: #1D4ED8; }
-.status-neutral { background: #F1F5F9; color: #475569; }
+.status-ok { background: rgba(134,239,172,.15); color: #BBF7D0; }
+.status-warn { background: rgba(251,191,36,.16); color: #FDE68A; }
+.status-info { background: rgba(147,197,253,.16); color: #BFDBFE; }
+.status-neutral { background: rgba(148,163,184,.14); color: #CBD5E1; }
 
 a.buy-link {
     color: var(--radar-blue) !important;
@@ -261,7 +261,7 @@ a.buy-link {
     border: 1px solid var(--radar-line);
     border-radius: 10px;
     overflow: hidden;
-    box-shadow: 0 10px 26px rgba(15,23,42,.04);
+    box-shadow: 0 16px 32px rgba(0,0,0,.18);
 }
 
 @media (max-width: 900px) {
