@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from datetime import date, timedelta
 from typing import Any
 
@@ -12,6 +11,7 @@ from sqlalchemy import func, select
 from app.deals import calculate_deal_score
 from app.db import AlertLog, FlightQuote, FlightSearch, ProviderLog, database_diagnostics, init_db, session_scope
 from app.formatting import format_brl
+from app.location_resolver import LocationResolution, resolve_location
 from app.monitor import run_due_searches, run_search_once
 from app.settings import get_settings
 from app.styles import load_custom_css
@@ -262,8 +262,12 @@ def status_badge(label: str, status: str = "neutral") -> str:
     return f'<span class="status-pill status-{status}">{label}</span>'
 
 
-def _is_iata_code(value: str) -> bool:
-    return bool(re.fullmatch(r"[A-Z]{3}", value or ""))
+def _resolve_search_location(value: str, field_label: str) -> LocationResolution | None:
+    location = resolve_location(value)
+    if location:
+        return location
+    st.error(f"Nao consegui identificar {field_label}. Use codigo IATA, cidade, aeroporto ou pais. Exemplos: BEL, Belem, Lisboa, Portugal.")
+    return None
 
 
 def render_header(provider_status: dict[str, Any], latest_provider_log: ProviderLog | None = None) -> None:
@@ -345,9 +349,19 @@ def render_sidebar(summary: dict, provider_status: dict[str, Any], db_connected:
         st.title("Radar de Passagens")
         st.caption("Painel de controle")
         st.subheader("Nova busca de passagem")
+        if st.session_state.get("last_location_resolution"):
+            st.info(st.session_state["last_location_resolution"])
         with st.form("new_search_form", clear_on_submit=False):
-            origin = st.text_input("Origem", "BEL").strip().upper()
-            destination = st.text_input("Destino", "LIS").strip().upper()
+            origin_input = st.text_input(
+                "Origem",
+                "BEL",
+                help="Digite cidade, pais, aeroporto ou codigo IATA. Ex.: Belem, Brasil, BEL.",
+            ).strip()
+            destination_input = st.text_input(
+                "Destino",
+                "LIS",
+                help="Digite cidade, pais, aeroporto ou codigo IATA. Ex.: Lisboa, Portugal, LIS.",
+            ).strip()
             departure = st.date_input("Data de ida", date.today() + timedelta(days=60))
             trip_label = st.selectbox("Tipo de viagem", list(TRIP_TYPE_OPTIONS.keys()), index=1)
             return_date = st.date_input(
@@ -365,16 +379,21 @@ def render_sidebar(summary: dict, provider_status: dict[str, Any], db_connected:
             start_monitoring = st.form_submit_button("Iniciar monitoramento", type="primary", use_container_width=True)
 
         if search_now or start_monitoring:
-            if not _is_iata_code(origin) or not _is_iata_code(destination):
-                st.error("Origem e destino devem ter exatamente 3 letras, como BEL ou LIS.")
+            origin_location = _resolve_search_location(origin_input, "a origem")
+            destination_location = _resolve_search_location(destination_input, "o destino")
+            if not origin_location or not destination_location:
+                pass
             elif telegram_enabled and not (settings.telegram_bot_token and settings.telegram_chat_id):
                 st.warning("Telegram marcado, mas os secrets do Telegram ainda não estão configurados.")
             else:
+                st.session_state["last_location_resolution"] = (
+                    f"Busca resolvida como {origin_location.label} -> {destination_location.label}."
+                )
                 with session_scope() as db:
                     search = FlightSearch(
                         owner_email="demo@radar.local",
-                        origin=origin,
-                        destination=destination,
+                        origin=origin_location.code,
+                        destination=destination_location.code,
                         departure_date=departure,
                         return_date=return_date if TRIP_TYPE_OPTIONS[trip_label] == "round_trip" else None,
                         flexible_dates=FLEXIBILITY_OPTIONS[flexibility],
