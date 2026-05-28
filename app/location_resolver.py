@@ -87,26 +87,50 @@ def resolve_location(value: str) -> LocationResolution | None:
     return None
 
 
+def search_locations(value: str, limit: int = 8) -> list[LocationResolution]:
+    query = (value or "").strip()
+    if not query:
+        return []
+
+    results: list[LocationResolution] = []
+    seen: set[str] = set()
+
+    if re.fullmatch(r"[A-Za-z]{3}", query):
+        code = query.upper()
+        results.append(LocationResolution(original=query, code=code, label=f"{code} (codigo IATA)", source="codigo informado"))
+        seen.add(code)
+
+    for locale in ("pt", "en"):
+        for item in _autocomplete_items(query, locale):
+            if item.get("type") not in {"city", "airport"} or not item.get("code"):
+                continue
+            resolution = _resolution_from_item(query, item, "autocomplete")
+            if resolution.code in seen:
+                continue
+            results.append(resolution)
+            seen.add(resolution.code)
+            if len(results) >= limit:
+                return results
+
+    fallback_code = COUNTRY_MAIN_CODES.get(_normalize_key(query))
+    if fallback_code and fallback_code not in seen:
+        results.append(
+            LocationResolution(
+                original=query,
+                code=fallback_code,
+                label=f"{query} ({fallback_code})",
+                source="pais mapeado",
+                location_type="country",
+            )
+        )
+
+    return results[:limit]
+
+
 @lru_cache(maxsize=256)
 def _resolve_with_autocomplete(query: str, locale: str) -> LocationResolution | None:
-    try:
-        response = requests.get(
-            AUTOCOMPLETE_URL,
-            params=[
-                ("term", query),
-                ("locale", locale),
-                ("types[]", "city"),
-                ("types[]", "airport"),
-                ("types[]", "country"),
-            ],
-            timeout=8,
-        )
-        response.raise_for_status()
-        payload = response.json()
-    except (requests.RequestException, ValueError):
-        return None
-
-    if not isinstance(payload, list):
+    payload = _autocomplete_items(query, locale)
+    if not payload:
         return None
 
     city_or_airport = _best_city_or_airport(payload, query)
@@ -122,6 +146,30 @@ def _resolve_with_autocomplete(query: str, locale: str) -> LocationResolution | 
             return LocationResolution(query, fallback_code, label, "autocomplete pais", "country")
 
     return None
+
+
+@lru_cache(maxsize=256)
+def _autocomplete_items(query: str, locale: str) -> list[dict[str, Any]]:
+    try:
+        response = requests.get(
+            AUTOCOMPLETE_URL,
+            params=[
+                ("term", query),
+                ("locale", locale),
+                ("types[]", "city"),
+                ("types[]", "airport"),
+                ("types[]", "country"),
+            ],
+            timeout=8,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except (requests.RequestException, ValueError):
+        return []
+
+    if not isinstance(payload, list):
+        return []
+    return payload
 
 
 def _best_city_or_airport(items: list[dict[str, Any]], query: str) -> dict[str, Any] | None:

@@ -11,7 +11,7 @@ from sqlalchemy import func, select
 from app.deals import calculate_deal_score
 from app.db import AlertLog, FlightQuote, FlightSearch, ProviderLog, database_diagnostics, init_db, session_scope
 from app.formatting import format_brl
-from app.location_resolver import LocationResolution, resolve_location
+from app.location_resolver import LocationResolution, resolve_location, search_locations
 from app.monitor import run_due_searches, run_search_once
 from app.settings import get_settings
 from app.styles import load_custom_css
@@ -400,6 +400,37 @@ def _resolve_search_location(value: str, field_label: str) -> LocationResolution
     return None
 
 
+def _location_option_label(location: LocationResolution) -> str:
+    source_type = "Aeroporto" if location.location_type == "airport" else "Cidade/area"
+    return f"{location.label} - {source_type}"
+
+
+def _render_location_picker(label: str, key: str) -> tuple[str, LocationResolution | None]:
+    query = st.text_input(
+        label,
+        value="",
+        key=f"{key}_query",
+        placeholder="Cidade, pais ou codigo do aeroporto",
+        help="Digite cidade, pais, aeroporto ou codigo IATA. Ex.: Belem, Orlando, Lisboa, BEL.",
+    ).strip()
+    if not query:
+        st.caption("Digite para ver os aeroportos e codigos disponiveis.")
+        return query, None
+
+    options = search_locations(query)
+    if not options:
+        st.caption("Nenhum aeroporto encontrado para esse texto.")
+        return query, None
+
+    selected = st.selectbox(
+        f"Aeroporto para {label.lower()}",
+        options,
+        key=f"{key}_airport",
+        format_func=_location_option_label,
+    )
+    return query, selected
+
+
 def render_header(provider_status: dict[str, Any], latest_provider_log: ProviderLog | None = None) -> None:
     load_custom_css()
     if provider_status["demo_mode"]:
@@ -481,22 +512,14 @@ def render_sidebar(summary: dict, provider_status: dict[str, Any], db_connected:
         st.subheader("Nova busca de passagem")
         if st.session_state.get("last_location_resolution"):
             st.info(st.session_state["last_location_resolution"])
+        origin_input, selected_origin = _render_location_picker("Origem", "origin")
+        destination_input, selected_destination = _render_location_picker("Destino", "destination")
         with st.form("new_search_form", clear_on_submit=False):
-            origin_input = st.text_input(
-                "Origem",
-                "BEL",
-                help="Digite cidade, pais, aeroporto ou codigo IATA. Ex.: Belem, Brasil, BEL.",
-            ).strip()
-            destination_input = st.text_input(
-                "Destino",
-                "LIS",
-                help="Digite cidade, pais, aeroporto ou codigo IATA. Ex.: Lisboa, Portugal, LIS.",
-            ).strip()
-            departure = st.date_input("Data de ida", date.today() + timedelta(days=60))
+            departure = st.date_input("Data de ida", value=None)
             trip_label = st.selectbox("Tipo de viagem", list(TRIP_TYPE_OPTIONS.keys()), index=1)
             return_date = st.date_input(
                 "Data de volta opcional",
-                date.today() + timedelta(days=75),
+                value=None,
                 disabled=TRIP_TYPE_OPTIONS[trip_label] == "one_way",
             )
             adults = st.number_input("Adultos", min_value=1, max_value=9, value=1)
@@ -509,10 +532,12 @@ def render_sidebar(summary: dict, provider_status: dict[str, Any], db_connected:
             start_monitoring = st.form_submit_button("Iniciar monitoramento", type="primary", use_container_width=True)
 
         if search_now or start_monitoring:
-            origin_location = _resolve_search_location(origin_input, "a origem")
-            destination_location = _resolve_search_location(destination_input, "o destino")
+            origin_location = selected_origin or _resolve_search_location(origin_input, "a origem")
+            destination_location = selected_destination or _resolve_search_location(destination_input, "o destino")
             if not origin_location or not destination_location:
                 pass
+            elif departure is None:
+                st.warning("Informe a data de ida antes de buscar.")
             elif telegram_enabled and not (settings.telegram_bot_token and settings.telegram_chat_id):
                 st.warning("Telegram marcado, mas os secrets do Telegram ainda não estão configurados.")
             else:
