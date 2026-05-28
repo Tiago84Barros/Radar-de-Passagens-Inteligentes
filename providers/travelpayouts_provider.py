@@ -38,6 +38,7 @@ class TravelPayoutsProvider(BaseProvider):
             "departure_at": _date_to_month(departure_date),
             "currency": currency.lower(),
             "limit": limit,
+            "page": 1,
             "token": self.settings.travelpayouts_api_token,
             "sorting": "price",
             "one_way": "false" if return_date else "true",
@@ -47,12 +48,27 @@ class TravelPayoutsProvider(BaseProvider):
 
         try:
             response = requests.get(self.BASE_URL, params=params, timeout=self.timeout)
+            if response.status_code in {401, 403}:
+                raise TravelPayoutsProviderError(
+                    "Token da Travelpayouts recusado. Confira se o secret TRAVELPAYOUTS_API_TOKEN esta correto.",
+                    status_code=response.status_code,
+                )
             response.raise_for_status()
             payload = response.json()
+        except TravelPayoutsProviderError:
+            raise
         except requests.RequestException as exc:
-            raise TravelPayoutsProviderError("Não foi possível consultar a Travelpayouts agora.") from exc
+            status_code = exc.response.status_code if exc.response is not None else None
+            raise TravelPayoutsProviderError(
+                "Nao foi possivel consultar a Travelpayouts agora. Tente novamente em alguns minutos.",
+                status_code=status_code,
+            ) from exc
         except ValueError as exc:
-            raise TravelPayoutsProviderError("A Travelpayouts retornou uma resposta inválida.") from exc
+            raise TravelPayoutsProviderError("A Travelpayouts retornou uma resposta invalida.") from exc
+
+        if isinstance(payload, dict) and payload.get("success") is False:
+            error = payload.get("error") or payload.get("errors") or "resposta sem sucesso"
+            raise TravelPayoutsProviderError(f"A Travelpayouts recusou a consulta: {_safe_error_text(error)}")
 
         return self.normalize_response(
             payload,
@@ -93,7 +109,17 @@ class TravelPayoutsProvider(BaseProvider):
 
 
 class TravelPayoutsProviderError(RuntimeError):
-    pass
+    def __init__(self, message: str, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def _safe_error_text(value: Any) -> str:
+    text = str(value)
+    token = get_settings().travelpayouts_api_token or ""
+    if token:
+        text = text.replace(token, "[token oculto]")
+    return text[:240]
 
 
 def _date_to_month(value: date | str) -> str:

@@ -160,6 +160,9 @@ def ensure_schema() -> None:
         "alert_logs": {
             "sent_at": "TIMESTAMP",
         },
+        "provider_logs": {
+            "error_message": "TEXT",
+        },
     }
     with engine.begin() as conn:
         for table, columns in additions.items():

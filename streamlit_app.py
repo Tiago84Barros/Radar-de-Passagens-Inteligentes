@@ -10,11 +10,12 @@ import streamlit as st
 from sqlalchemy import func, select
 
 from app.deals import calculate_deal_score
-from app.db import AlertLog, FlightQuote, FlightSearch, database_diagnostics, init_db, session_scope
+from app.db import AlertLog, FlightQuote, FlightSearch, ProviderLog, database_diagnostics, init_db, session_scope
 from app.formatting import format_brl
 from app.monitor import run_due_searches, run_search_once
 from app.settings import get_settings
 from app.styles import load_custom_css
+from providers.travelpayouts_provider import TravelPayoutsProvider, TravelPayoutsProviderError
 
 
 st.set_page_config(
@@ -65,7 +66,9 @@ def require_password() -> None:
     st.stop()
 
 
-def seed_if_empty() -> None:
+def seed_if_empty(enable_demo_seed: bool) -> None:
+    if not enable_demo_seed:
+        return
     with session_scope() as db:
         exists = db.scalar(select(func.count()).select_from(FlightSearch)) or 0
         if exists:
@@ -129,6 +132,12 @@ def load_summary() -> dict:
         quotes = list(db.scalars(select(FlightQuote).order_by(FlightQuote.detected_at.desc()).limit(500)))
         searches = list(db.scalars(select(FlightSearch).order_by(FlightSearch.created_at.desc())))
         latest_search = db.scalar(select(func.max(FlightSearch.last_checked_at)))
+        latest_provider_log = db.scalar(
+            select(ProviderLog)
+            .where(ProviderLog.provider == "travelpayouts")
+            .order_by(ProviderLog.created_at.desc())
+            .limit(1)
+        )
         latest_alert_by_quote = {
             quote_id: status
             for quote_id, status in db.execute(
@@ -142,6 +151,7 @@ def load_summary() -> dict:
         "quotes": quotes,
         "searches": searches,
         "latest_search": latest_search,
+        "latest_provider_log": latest_provider_log,
         "latest_alert_by_quote": latest_alert_by_quote,
         "routes": routes,
     }
@@ -256,11 +266,22 @@ def _is_iata_code(value: str) -> bool:
     return bool(re.fullmatch(r"[A-Z]{3}", value or ""))
 
 
-def render_header(provider_status: dict[str, Any]) -> None:
+def render_header(provider_status: dict[str, Any], latest_provider_log: ProviderLog | None = None) -> None:
     load_custom_css()
     if provider_status["demo_mode"]:
         st.markdown(
             '<div class="demo-banner">Modo demonstração: configure a Travelpayouts para buscar passagens reais.</div>',
+            unsafe_allow_html=True,
+        )
+    elif latest_provider_log and latest_provider_log.status == "real_failed_fallback":
+        st.markdown(
+            f'<div class="demo-banner">Travelpayouts configurada, mas a ultima consulta falhou e usou fallback demo. '
+            f'Motivo: {latest_provider_log.error_message or "erro nao informado"}</div>',
+            unsafe_allow_html=True,
+        )
+    elif latest_provider_log and latest_provider_log.status == "real_empty":
+        st.markdown(
+            '<div class="demo-banner">Travelpayouts respondeu, mas nao encontrou cotacoes para a ultima rota/data pesquisada.</div>',
             unsafe_allow_html=True,
         )
     st.markdown(
@@ -386,6 +407,9 @@ def render_sidebar(summary: dict, provider_status: dict[str, Any], db_connected:
             ("Última busca executada", format_datetime(summary.get("latest_search"))),
             ("Buscas ativas", summary["active"]),
         ]
+        latest_provider_log = summary.get("latest_provider_log")
+        if latest_provider_log:
+            status_rows.insert(3, ("Ultimo status API", latest_provider_log.status))
         for label, value in status_rows:
             st.markdown(
                 f'<div class="status-row"><span class="status-label">{label}</span>'
@@ -486,6 +510,7 @@ def render_opportunities(df: pd.DataFrame) -> None:
                     <div class="opportunity-detail">Economia estimada: {money(economy, row['moeda'])}</div>
                     <div class="opportunity-detail">Score: {row['score']}/100</div>
                     <div class="opportunity-detail">Companhia: {row['companhia']}</div>
+                    <div class="opportunity-detail">Provider: {row['provedor']}</div>
                     <div class="opportunity-detail">Duração: {row['duração']} · Escalas: {row['escalas']}</div>
                     <div class="opportunity-detail"><a class="buy-link" href="{row['link']}" target="_blank">Abrir link de compra</a></div>
                 </div>
@@ -574,6 +599,43 @@ def render_settings(provider_status: dict[str, Any], db_connected: bool) -> None
         {"configuração": "Banco", "status": "Conectado" if db_connected else "Indisponível"},
     ]
     st.dataframe(pd.DataFrame(provider_rows), use_container_width=True, hide_index=True)
+    st.markdown("**Teste de conexao Travelpayouts**")
+    if st.button("Testar conexao com Travelpayouts", use_container_width=True):
+        provider = TravelPayoutsProvider(timeout=15)
+        if not provider.is_configured():
+            st.warning("TRAVELPAYOUTS_API_TOKEN nao configurado. O app continuara em modo demonstracao.")
+        else:
+            try:
+                sample = provider.search_flights(
+                    origin="GRU",
+                    destination="LIS",
+                    departure_date=date.today() + timedelta(days=60),
+                    return_date=date.today() + timedelta(days=75),
+                    currency="BRL",
+                    limit=1,
+                )
+                if sample:
+                    st.success("Conexao com Travelpayouts realizada com sucesso. A API retornou cotacoes reais.")
+                else:
+                    st.info("Conexao com Travelpayouts realizada, mas a API nao retornou cotacoes para a rota de teste.")
+            except TravelPayoutsProviderError as exc:
+                st.error(str(exc))
+    latest_provider_log = load_summary().get("latest_provider_log")
+    if latest_provider_log:
+        st.markdown("**Ultimo diagnostico Travelpayouts**")
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "status": latest_provider_log.status,
+                        "mensagem": latest_provider_log.error_message or "-",
+                        "registrado_em": format_datetime(latest_provider_log.created_at),
+                    }
+                ]
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
     st.markdown("**Como configurar secrets**")
     st.markdown(
         "Configure os secrets no Streamlit Cloud e também em `Settings > Secrets and variables > Actions` "
@@ -624,7 +686,7 @@ def main() -> None:
     db_connected = True
     try:
         init_db()
-        seed_if_empty()
+        seed_if_empty(enable_demo_seed=provider_status["demo_mode"])
     except Exception as exc:  # noqa: BLE001
         db_connected = False
         load_custom_css()
@@ -637,7 +699,7 @@ def main() -> None:
 
     summary = load_summary()
     render_sidebar(summary, provider_status, db_connected)
-    render_header(provider_status)
+    render_header(provider_status, summary.get("latest_provider_log"))
     df_quotes = quotes_df(summary["quotes"], summary["searches"], summary["latest_alert_by_quote"])
     render_top_metrics(summary, df_quotes)
     st.write("")

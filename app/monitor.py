@@ -8,7 +8,7 @@ from sqlalchemy import select
 from app.alerts import dispatch_alerts
 from app.deals import calculate_deal_score
 from app.db import FlightQuote, FlightSearch, ProviderLog, init_db, session_scope
-from providers.provider_manager import search_all_providers
+from providers.provider_manager import get_last_provider_diagnostic, search_all_providers
 
 
 def _query_from_search(search: FlightSearch) -> dict:
@@ -40,6 +40,7 @@ def is_due(search: FlightSearch, now: datetime | None = None) -> bool:
 def run_search_once(db, search: FlightSearch) -> int:
     saved = 0
     offers = search_all_providers(_query_from_search(search))
+    provider_diagnostic = get_last_provider_diagnostic()
     for offer in offers:
         history = list(
             db.scalars(
@@ -77,6 +78,13 @@ def run_search_once(db, search: FlightSearch) -> int:
         if decision["is_opportunity"]:
             dispatch_alerts(db, search, quote, decision)
     search.last_checked_at = datetime.now(timezone.utc)
+    db.add(
+        ProviderLog(
+            provider=provider_diagnostic.get("provider", "travelpayouts"),
+            status=str(provider_diagnostic.get("status", "unknown"))[:40],
+            error_message=provider_diagnostic.get("message"),
+        )
+    )
     db.add(ProviderLog(provider="all", status=f"ok:{saved}"))
     return saved
 

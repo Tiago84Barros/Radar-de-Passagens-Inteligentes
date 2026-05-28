@@ -7,28 +7,64 @@ from typing import Any
 from providers.travelpayouts_provider import TravelPayoutsProvider, TravelPayoutsProviderError
 
 
+_LAST_PROVIDER_DIAGNOSTIC: dict[str, Any] = {
+    "provider": "travelpayouts",
+    "status": "not_run",
+    "message": "Nenhuma consulta executada ainda.",
+}
+
+
 def search_all_providers(search_params: dict[str, Any]) -> list[dict[str, Any]]:
+    global _LAST_PROVIDER_DIAGNOSTIC
     provider = TravelPayoutsProvider()
     results: list[dict[str, Any]] = []
 
     if provider.is_configured():
         try:
-            results.extend(
-                provider.search_flights(
-                    origin=search_params["origin"],
-                    destination=search_params["destination"],
-                    departure_date=search_params["departure_date"],
-                    return_date=search_params.get("return_date"),
-                    currency=search_params.get("currency", "BRL"),
-                    limit=search_params.get("limit", 20),
-                )
+            travelpayouts_results = provider.search_flights(
+                origin=search_params["origin"],
+                destination=search_params["destination"],
+                departure_date=search_params["departure_date"],
+                return_date=search_params.get("return_date"),
+                currency=search_params.get("currency", "BRL"),
+                limit=search_params.get("limit", 20),
             )
-        except TravelPayoutsProviderError:
-            results.extend(_demo_results(search_params, provider_name="travelpayouts_demo_fallback"))
+            results.extend(travelpayouts_results)
+            if travelpayouts_results:
+                _LAST_PROVIDER_DIAGNOSTIC = {
+                    "provider": provider.name,
+                    "status": "real_ok",
+                    "message": f"{len(travelpayouts_results)} cotacao(oes) reais recebidas da Travelpayouts.",
+                }
+            else:
+                _LAST_PROVIDER_DIAGNOSTIC = {
+                    "provider": provider.name,
+                    "status": "real_empty",
+                    "message": "Travelpayouts respondeu, mas nao retornou cotacoes para essa rota/data.",
+                }
+        except TravelPayoutsProviderError as exc:
+            message = str(exc)
+            if exc.status_code:
+                message = f"{message} HTTP {exc.status_code}."
+            _LAST_PROVIDER_DIAGNOSTIC = {
+                "provider": provider.name,
+                "status": "real_failed_fallback",
+                "message": message,
+            }
+            results.extend(_demo_results(search_params, provider_name="travelpayouts_demo_fallback", fallback_reason=message))
     else:
+        _LAST_PROVIDER_DIAGNOSTIC = {
+            "provider": provider.name,
+            "status": "demo_no_token",
+            "message": "TRAVELPAYOUTS_API_TOKEN nao configurado; usando modo demonstracao.",
+        }
         results.extend(_demo_results(search_params))
 
     return _sort_and_dedupe(results)
+
+
+def get_last_provider_diagnostic() -> dict[str, Any]:
+    return dict(_LAST_PROVIDER_DIAGNOSTIC)
 
 
 def _sort_and_dedupe(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -48,7 +84,11 @@ def _sort_and_dedupe(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(unique.values(), key=lambda quote: float(quote.get("price") or 0))
 
 
-def _demo_results(search_params: dict[str, Any], provider_name: str = "travelpayouts_demo") -> list[dict[str, Any]]:
+def _demo_results(
+    search_params: dict[str, Any],
+    provider_name: str = "travelpayouts_demo",
+    fallback_reason: str | None = None,
+) -> list[dict[str, Any]]:
     origin = str(search_params.get("origin") or "BEL").upper()
     destination = str(search_params.get("destination") or "LIS").upper()
     departure_date = _date_to_day(search_params.get("departure_date") or date.today() + timedelta(days=90))
@@ -76,7 +116,7 @@ def _demo_results(search_params: dict[str, Any], provider_name: str = "travelpay
                 "duration_minutes": rng.randint(430, 860),
                 "stops": stops,
                 "booking_link": "",
-                "raw_payload": {"demo": True},
+                "raw_payload": {"demo": True, "fallback_reason": fallback_reason},
             }
         )
     return results
