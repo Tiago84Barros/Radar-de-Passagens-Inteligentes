@@ -240,11 +240,79 @@ def render_route_postcard(summary: dict) -> None:
     )
 
 
+def render_year_price_calendar(summary: dict, df: pd.DataFrame) -> None:
+    st.subheader("Melhores preços nos próximos 12 meses")
+    if df.empty:
+        st.info("Defina origem e destino na sidebar e clique em Buscar agora para montar o calendário anual.")
+        return
+
+    context = route_context_from_latest(summary)
+    if not context:
+        st.info("Defina uma rota na sidebar para ver o calendário anual de preços.")
+        return
+
+    origin = str(context.get("origin_code") or "").upper()
+    destination = str(context.get("destination_code") or "").upper()
+    route_df = df[(df["origem"] == origin) & (df["destino"] == destination)].copy()
+    if route_df.empty:
+        st.info("Ainda não há cotações salvas para esta rota. Clique em Buscar agora para coletar o calendário anual.")
+        return
+
+    route_df["ida_dt"] = pd.to_datetime(route_df["ida"], errors="coerce")
+    today = pd.Timestamp(date.today())
+    one_year = today + pd.Timedelta(days=365)
+    route_df = route_df[(route_df["ida_dt"] >= today) & (route_df["ida_dt"] <= one_year)]
+    route_df = route_df.dropna(subset=["ida_dt", "preço"])
+    if route_df.empty:
+        st.info("Não há cotações futuras no intervalo de 12 meses para esta rota.")
+        return
+
+    route_df["companhia"] = route_df["companhia"].fillna("Companhia não informada").replace("", "Companhia não informada")
+    best_by_airline = (
+        route_df.groupby(["ida_dt", "companhia"], as_index=False)
+        .agg(preço=("preço", "min"), provedor=("provedor", "first"), link=("link", "first"))
+        .sort_values(["ida_dt", "preço"])
+    )
+    best_overall = best_by_airline.loc[best_by_airline.groupby("ida_dt")["preço"].idxmin()].copy()
+
+    metrics = [
+        ("Menor preço anual", money(best_overall["preço"].min()), f"{origin} -> {destination}"),
+        ("Preço médio anual", money(best_overall["preço"].mean()), "Menores tarifas por data"),
+        ("Companhias", best_by_airline["companhia"].nunique(), "Com cotações registradas"),
+        ("Datas mapeadas", best_overall["ida_dt"].nunique(), "Dentro dos próximos 12 meses"),
+    ]
+    render_metric_cards(metrics)
+
+    fig = px.line(
+        best_by_airline,
+        x="ida_dt",
+        y="preço",
+        color="companhia",
+        markers=True,
+        labels={"ida_dt": "Data de ida", "preço": "Preço", "companhia": "Companhia"},
+    )
+    fig.add_scatter(
+        x=best_overall["ida_dt"],
+        y=best_overall["preço"],
+        mode="markers",
+        name="Melhor do dia",
+        marker=dict(size=10, color="#2DD4BF", symbol="diamond"),
+    )
+    fig.update_layout(height=430, margin=dict(l=8, r=8, t=20, b=8), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+    st.plotly_chart(fig, use_container_width=True)
+
+    table = best_overall.sort_values("preço").head(12)[["ida_dt", "companhia", "preço", "provedor", "link"]].copy()
+    table["data de ida"] = table["ida_dt"].map(format_date)
+    table["preço"] = table["preço"].map(format_brl)
+    table = table[["data de ida", "companhia", "preço", "provedor", "link"]]
+    st.dataframe(table, use_container_width=True, hide_index=True)
+
+
 def load_summary() -> dict:
     with session_scope() as db:
         active = db.scalar(select(func.count()).select_from(FlightSearch).where(FlightSearch.is_active.is_(True))) or 0
         alerts = db.scalar(select(func.count()).select_from(AlertLog)) or 0
-        quotes = list(db.scalars(select(FlightQuote).order_by(FlightQuote.detected_at.desc()).limit(500)))
+        quotes = list(db.scalars(select(FlightQuote).order_by(FlightQuote.detected_at.desc()).limit(5000)))
         searches = list(db.scalars(select(FlightSearch).order_by(FlightSearch.created_at.desc())))
         latest_search = db.scalar(select(func.max(FlightSearch.last_checked_at)))
         latest_provider_log = db.scalar(
@@ -533,7 +601,7 @@ def render_sidebar(summary: dict, provider_status: dict[str, Any], db_connected:
                     )
                     db.add(search)
                     db.flush()
-                    saved = run_search_once(db, search)
+                    saved = run_search_once(db, search, include_year_calendar=True)
                 if start_monitoring:
                     st.success(f"Monitoramento iniciado. {saved} cotação(ões) salvas.")
                 else:
@@ -582,6 +650,8 @@ def render_overview(summary: dict, df: pd.DataFrame) -> None:
         unsafe_allow_html=True,
     )
     st.write("")
+    render_year_price_calendar(summary, df)
+    st.write("")
     left, right = st.columns([1.35, 1])
     with left:
         st.subheader("Evolução geral de preços")
@@ -593,12 +663,13 @@ def render_overview(summary: dict, df: pd.DataFrame) -> None:
             daily = daily.dropna(subset=["detectado_em_dt"])
             if daily.empty:
                 st.info("As cotações existem, mas ainda não há datas válidas para montar o gráfico.")
-                pass
-            daily["dia"] = daily["detectado_em_dt"].dt.date
-            daily = daily.groupby(["dia", "rota"], as_index=False)["preço"].min()
-            fig = px.line(daily, x="dia", y="preço", color="rota", markers=True)
-            fig.update_layout(height=390, margin=dict(l=8, r=8, t=20, b=8), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-            st.plotly_chart(fig, use_container_width=True)
+                daily = pd.DataFrame()
+            if not daily.empty:
+                daily["dia"] = daily["detectado_em_dt"].dt.date
+                daily = daily.groupby(["dia", "rota"], as_index=False)["preço"].min()
+                fig = px.line(daily, x="dia", y="preço", color="rota", markers=True)
+                fig.update_layout(height=390, margin=dict(l=8, r=8, t=20, b=8), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+                st.plotly_chart(fig, use_container_width=True)
     with right:
         st.subheader("Status por provider")
         if df.empty:

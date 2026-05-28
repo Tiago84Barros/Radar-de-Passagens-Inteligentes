@@ -79,6 +79,36 @@ class TravelPayoutsProvider(BaseProvider):
             currency=currency,
         )
 
+    def search_year_flights(
+        self,
+        origin: str,
+        destination: str,
+        start_date: date | str,
+        return_date: date | str | None = None,
+        currency: str = "brl",
+        limit_per_month: int = 100,
+    ) -> list[dict[str, Any]]:
+        results: list[dict[str, Any]] = []
+        start_month = _month_start(start_date)
+        for offset in range(12):
+            month = _add_months(start_month, offset)
+            month_results = self.search_flights(
+                origin=origin,
+                destination=destination,
+                departure_date=month,
+                return_date=return_date,
+                currency=currency,
+                limit=limit_per_month,
+            )
+            for item in month_results:
+                item["raw_payload"] = {
+                    **dict(item.get("raw_payload") or {}),
+                    "calendar_collection": "year",
+                    "calendar_month": _date_to_month(month),
+                }
+            results.extend(month_results)
+        return results
+
     def normalize_response(self, payload: Any, **kwargs: Any) -> list[dict[str, Any]]:
         data = payload.get("data", []) if isinstance(payload, dict) else []
         results: list[dict[str, Any]] = []
@@ -131,3 +161,16 @@ def _date_to_month(value: date | str) -> str:
 def _date_to_day(value: date | str) -> str:
     text = value.isoformat() if hasattr(value, "isoformat") else str(value)
     return text[:10]
+
+
+def _month_start(value: date | str) -> date:
+    text = _date_to_day(value)
+    year, month, _ = text.split("-")
+    return date(int(year), int(month), 1)
+
+
+def _add_months(value: date, months: int) -> date:
+    month_index = value.month - 1 + months
+    year = value.year + month_index // 12
+    month = month_index % 12 + 1
+    return date(year, month, 1)

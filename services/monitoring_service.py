@@ -6,7 +6,7 @@ from sqlalchemy import select
 
 from app.alerts import dispatch_alerts
 from app.db import FlightSearch, init_db, session_scope
-from providers.provider_manager import get_last_provider_diagnostic, search_all_providers
+from providers.provider_manager import get_last_provider_diagnostic, search_all_providers, search_year_price_calendar
 from services.database_service import log_source, quote_history, save_quote
 from services.deal_score import calculate_deal_score, should_send_alert
 
@@ -37,7 +37,7 @@ def is_due(search: FlightSearch, now: datetime | None = None) -> bool:
     return now >= last_checked + timedelta(minutes=search.frequency_minutes)
 
 
-def run_search_once(db, search: FlightSearch) -> int:
+def run_search_once(db, search: FlightSearch, include_year_calendar: bool = False) -> int:
     saved = 0
     offers = search_all_providers(query_from_search(search))
     provider_diagnostic = get_last_provider_diagnostic()
@@ -48,6 +48,15 @@ def run_search_once(db, search: FlightSearch) -> int:
         saved += 1
         if should_send_alert(decision, offer, search.max_price):
             dispatch_alerts(db, search, quote, decision)
+    if include_year_calendar:
+        calendar_offers = search_year_price_calendar(query_from_search(search))
+        for offer in calendar_offers:
+            history = quote_history(db, search, offer)
+            decision = calculate_deal_score(offer, search.max_price, history)
+            save_quote(db, search, offer, decision["classification"])
+            saved += 1
+        if calendar_offers:
+            log_source(db, "travelpayouts_calendar", "ok", f"{len(calendar_offers)} cotacao(oes) anuais salvas")
     search.last_checked_at = datetime.now(timezone.utc)
     log_source(
         db,

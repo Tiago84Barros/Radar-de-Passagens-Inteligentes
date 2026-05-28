@@ -77,6 +77,25 @@ def search_all_providers(search_params: dict[str, Any]) -> list[dict[str, Any]]:
     return _sort_and_dedupe(results)
 
 
+def search_year_price_calendar(search_params: dict[str, Any]) -> list[dict[str, Any]]:
+    provider = TravelPayoutsProvider()
+    if provider.is_configured():
+        try:
+            return _sort_and_dedupe(
+                provider.search_year_flights(
+                    origin=search_params["origin"],
+                    destination=search_params["destination"],
+                    start_date=search_params.get("departure_date") or date.today(),
+                    return_date=search_params.get("return_date"),
+                    currency=search_params.get("currency", "BRL"),
+                    limit_per_month=search_params.get("year_limit_per_month", 100),
+                )
+            )
+        except TravelPayoutsProviderError:
+            return _sort_and_dedupe(_demo_year_results(search_params))
+    return _sort_and_dedupe(_demo_year_results(search_params))
+
+
 def get_last_provider_diagnostic() -> dict[str, Any]:
     return dict(_LAST_PROVIDER_DIAGNOSTIC)
 
@@ -138,6 +157,46 @@ def _demo_results(
     return results
 
 
+def _demo_year_results(search_params: dict[str, Any]) -> list[dict[str, Any]]:
+    origin = str(search_params.get("origin") or "BEL").upper()
+    destination = str(search_params.get("destination") or "LIS").upper()
+    start = _date_to_date(search_params.get("departure_date") or date.today())
+    currency = str(search_params.get("currency") or "BRL").upper()
+    return_date = search_params.get("return_date")
+    rng = Random(f"year:{origin}:{destination}:{start}:{return_date}:{currency}")
+    airlines = ["Azul", "GOL", "LATAM", "TAP", "Iberia"]
+    results: list[dict[str, Any]] = []
+    for week in range(0, 52):
+        departure = start + timedelta(days=week * 7)
+        seasonal = 280 * (1 if departure.month in {1, 7, 12} else 0)
+        for airline in airlines:
+            price = 900 + rng.randint(0, 1100) + seasonal + week * rng.randint(-3, 5)
+            results.append(
+                {
+                    "provider": "travelpayouts_demo_calendar",
+                    "source": "travelpayouts_demo_calendar",
+                    "origin": origin,
+                    "destination": destination,
+                    "departure_date": _date_to_day(departure),
+                    "return_date": _date_to_day(return_date) if return_date else None,
+                    "airline": airline,
+                    "price": float(max(price, 299)),
+                    "currency": currency,
+                    "duration_minutes": None,
+                    "stops": None,
+                    "booking_link": "",
+                    "raw_payload": {"demo": True, "calendar_collection": "year"},
+                }
+            )
+    return results
+
+
 def _date_to_day(value: date | str) -> str:
     text = value.isoformat() if hasattr(value, "isoformat") else str(value)
     return text[:10]
+
+
+def _date_to_date(value: date | str) -> date:
+    if isinstance(value, date):
+        return value
+    return date.fromisoformat(_date_to_day(value))
