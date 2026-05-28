@@ -2,38 +2,36 @@ from __future__ import annotations
 
 import smtplib
 from email.message import EmailMessage
+from datetime import datetime, timezone
 
 import httpx
 
+from app.formatting import format_brl
 from app.db import AlertLog, FlightQuote, FlightSearch
-from app.pricing import PriceDecision
 from app.settings import get_settings
+from services.telegram_service import send_telegram_message
 
 
-def build_alert_message(search: FlightSearch, quote: FlightQuote, decision: PriceDecision) -> str:
+def build_alert_message(search: FlightSearch, quote: FlightQuote, decision) -> str:
     comparison = search.max_price - quote.price
+    reasons = getattr(decision, "reasons", None) or decision.get("reasons", [decision.get("classification", quote.opportunity)])
     return (
         "Radar de Passagens Inteligentes\n"
         f"Rota: {quote.origin} -> {quote.destination}\n"
         f"Datas: {quote.departure_date}{' até ' + str(quote.return_date) if quote.return_date else ''}\n"
-        f"Preço encontrado: {quote.currency} {quote.price:,.2f}\n"
+        f"Preço encontrado: {format_brl(quote.price)}\n"
         f"Companhia: {quote.airline}\n"
-        f"Comparação com limite: {quote.currency} {comparison:,.2f}\n"
+        f"Economia estimada: {format_brl(comparison if comparison > 0 else 0)}\n"
         f"Classificação: {quote.opportunity}\n"
         f"Provedor: {quote.provider}\n"
         f"Link: {quote.booking_link}\n"
-        f"Motivos: {'; '.join(decision.reasons)}"
+        f"Motivos: {'; '.join(reasons)}"
     )
 
 
 def send_telegram(message: str) -> str:
-    settings = get_settings()
-    if not settings.telegram_bot_token or not settings.telegram_chat_id:
-        return "mock"
-    url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage"
-    response = httpx.post(url, json={"chat_id": settings.telegram_chat_id, "text": message}, timeout=15)
-    response.raise_for_status()
-    return "sent"
+    ok, detail = send_telegram_message(message)
+    return "sent" if ok else detail
 
 
 def send_email(to_email: str, message: str) -> str:
@@ -59,4 +57,4 @@ def dispatch_alerts(db, search: FlightSearch, quote: FlightQuote, decision: Pric
             status = send_telegram(message) if channel == "telegram" else send_email(search.owner_email, message)
         except Exception as exc:  # noqa: BLE001
             status = f"failed: {exc}"
-        db.add(AlertLog(search_id=search.id, quote_id=quote.id, channel=channel, message=message, status=status))
+        db.add(AlertLog(search_id=search.id, quote_id=quote.id, channel=channel, message=message, status=status, sent_at=datetime.now(timezone.utc)))

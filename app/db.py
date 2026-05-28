@@ -3,9 +3,9 @@ from __future__ import annotations
 from contextlib import contextmanager
 from datetime import datetime
 from typing import Iterator, Optional
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlsplit
 
-from sqlalchemy import Boolean, Date, DateTime, Float, Integer, String, Text, create_engine, func
+from sqlalchemy import Boolean, Date, DateTime, Float, Integer, String, Text, create_engine, func, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
@@ -26,6 +26,7 @@ class FlightSearch(Base):
     departure_date: Mapped[datetime] = mapped_column(Date)
     return_date: Mapped[Optional[datetime]] = mapped_column(Date, nullable=True)
     flexible_dates: Mapped[bool] = mapped_column(Boolean, default=False)
+    adults: Mapped[int] = mapped_column(Integer, default=1)
     passengers: Mapped[int] = mapped_column(Integer, default=1)
     max_price: Mapped[float] = mapped_column(Float)
     currency: Mapped[str] = mapped_column(String(3), default="BRL")
@@ -37,6 +38,7 @@ class FlightSearch(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     last_checked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class FlightQuote(Base):
@@ -56,7 +58,9 @@ class FlightQuote(Base):
     booking_link: Mapped[str] = mapped_column(Text)
     provider: Mapped[str] = mapped_column(String(40), index=True)
     opportunity: Mapped[str] = mapped_column(String(40), default="normal")
+    raw_payload: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    collected_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class AlertLog(Base):
@@ -69,6 +73,7 @@ class AlertLog(Base):
     message: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(30), default="sent")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class ProviderLog(Base):
@@ -136,6 +141,33 @@ def database_diagnostics() -> dict[str, str]:
 
 def init_db() -> None:
     Base.metadata.create_all(bind=get_engine())
+    ensure_schema()
+
+
+def ensure_schema() -> None:
+    engine = get_engine()
+    existing = inspect(engine)
+    table_columns = {table: {column["name"] for column in existing.get_columns(table)} for table in existing.get_table_names()}
+    additions = {
+        "flight_searches": {
+            "adults": "INTEGER DEFAULT 1",
+            "updated_at": "TIMESTAMP",
+        },
+        "flight_quotes": {
+            "raw_payload": "TEXT",
+            "collected_at": "TIMESTAMP",
+        },
+        "alert_logs": {
+            "sent_at": "TIMESTAMP",
+        },
+    }
+    with engine.begin() as conn:
+        for table, columns in additions.items():
+            if table not in table_columns:
+                continue
+            for column, column_type in columns.items():
+                if column not in table_columns[table]:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}"))
 
 
 @contextmanager

@@ -49,6 +49,7 @@ class Settings:
     amadeus_env: str
     kiwi_api_key: str | None
     travelpayouts_token: str | None
+    travelpayouts_api_token: str | None
     telegram_bot_token: str | None
     telegram_chat_id: str | None
     smtp_host: str | None
@@ -64,7 +65,8 @@ class Settings:
         self.amadeus_client_secret = get_config_value("AMADEUS_CLIENT_SECRET")
         self.amadeus_env = _normalize_amadeus_env(get_config_value("AMADEUS_ENV", "test") or "test")
         self.kiwi_api_key = get_config_value("KIWI_API_KEY")
-        self.travelpayouts_token = get_config_value("TRAVELPAYOUTS_TOKEN")
+        self.travelpayouts_api_token = get_config_value("TRAVELPAYOUTS_API_TOKEN") or get_config_value("TRAVELPAYOUTS_TOKEN")
+        self.travelpayouts_token = self.travelpayouts_api_token
         self.telegram_bot_token = get_config_value("TELEGRAM_BOT_TOKEN")
         self.telegram_chat_id = get_config_value("TELEGRAM_CHAT_ID")
         self.smtp_host = get_config_value("SMTP_HOST")

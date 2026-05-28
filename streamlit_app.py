@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import date, timedelta
 from typing import Any
 
@@ -8,11 +9,12 @@ import plotly.express as px
 import streamlit as st
 from sqlalchemy import func, select
 
+from app.deals import calculate_deal_score
 from app.db import AlertLog, FlightQuote, FlightSearch, database_diagnostics, init_db, session_scope
+from app.formatting import format_brl
 from app.monitor import run_due_searches, run_search_once
 from app.settings import get_settings
 from app.styles import load_custom_css
-from services.amadeus_provider import AmadeusProvider, AmadeusConfigurationError, AmadeusConnectionError
 
 
 st.set_page_config(
@@ -35,6 +37,10 @@ OPPORTUNITY_LABELS = {
     "boa_oportunidade": "Boa",
     "excelente_oportunidade": "Excelente",
     "oportunidade_rara": "Ótima",
+    "Normal": "Normal",
+    "Boa oportunidade": "Boa oportunidade",
+    "Ótima oportunidade": "Ótima oportunidade",
+    "Excelente oportunidade": "Excelente oportunidade",
 }
 
 
@@ -71,6 +77,7 @@ def seed_if_empty() -> None:
             departure_date=date.today() + timedelta(days=70),
             return_date=date.today() + timedelta(days=84),
             flexible_dates=True,
+            adults=1,
             passengers=1,
             max_price=3200,
             currency="BRL",
@@ -84,9 +91,7 @@ def seed_if_empty() -> None:
 
 
 def money(value: Any, currency: str = "R$") -> str:
-    if value is None or pd.isna(value):
-        return "-"
-    return f"{currency} {float(value):,.0f}".replace(",", ".")
+    return format_brl(None if value is None or pd.isna(value) else float(value))
 
 
 def format_datetime(value: Any) -> str:
@@ -105,15 +110,13 @@ def format_date(value: Any) -> str:
 
 def get_provider_status(settings) -> dict[str, Any]:
     providers = {
-        "Amadeus": bool(settings.amadeus_client_id and settings.amadeus_client_secret),
-        "Kiwi/Tequila": bool(settings.kiwi_api_key),
-        "TravelPayouts": bool(settings.travelpayouts_token),
+        "Travelpayouts": bool(settings.travelpayouts_api_token),
     }
     active = [name for name, configured in providers.items() if configured]
     return {
         "providers": providers,
         "active_names": active,
-        "provider_label": ", ".join(active) if active else "Mocks internos",
+        "provider_label": "Travelpayouts real" if active else "Demonstração",
         "demo_mode": not bool(active),
         "amadeus_env": settings.amadeus_env,
     }
@@ -151,7 +154,7 @@ def quotes_df(quotes: list[FlightQuote], searches: list[FlightSearch], alerts_by
         search = search_map.get(quote.search_id)
         max_price = search.max_price if search else None
         economy = (max_price - quote.price) if max_price is not None else None
-        score = opportunity_score(quote.opportunity, economy, max_price)
+        deal = calculate_deal_score({"price": quote.price}, max_price, [])
         rows.append(
             {
                 "id": quote.id,
@@ -165,7 +168,7 @@ def quotes_df(quotes: list[FlightQuote], searches: list[FlightSearch], alerts_by
                 "preço": quote.price,
                 "preço máximo": max_price,
                 "economia": economy,
-                "score": score,
+                "score": deal["score"],
                 "moeda": quote.currency,
                 "duração_min": quote.duration_minutes,
                 "duração": duration_label(quote.duration_minutes),
@@ -173,7 +176,7 @@ def quotes_df(quotes: list[FlightQuote], searches: list[FlightSearch], alerts_by
                 "provedor": quote.provider,
                 "oportunidade": quote.opportunity,
                 "classificação": OPPORTUNITY_LABELS.get(quote.opportunity, quote.opportunity),
-                "detectado_em": quote.detected_at,
+                "detectado_em": quote.collected_at or quote.detected_at,
                 "link": quote.booking_link,
                 "alerta": alerts_by_quote.get(quote.id, "-"),
             }
@@ -234,7 +237,7 @@ def build_metrics(summary: dict, df: pd.DataFrame) -> dict[str, Any]:
     if not df.empty:
         recent = df[pd.to_datetime(df["detectado_em"], utc=True) >= (pd.Timestamp.utcnow() - pd.Timedelta(hours=24))]
     positive_economy = df["economia"].clip(lower=0).sum() if not df.empty and "economia" in df else 0
-    classified = {"boa_oportunidade", "excelente_oportunidade", "oportunidade_rara"}
+    classified = {"boa_oportunidade", "excelente_oportunidade", "oportunidade_rara", "Boa oportunidade", "Ótima oportunidade", "Excelente oportunidade"}
     return {
         "active": summary["active"],
         "alerts": summary["alerts"],
@@ -249,11 +252,15 @@ def status_badge(label: str, status: str = "neutral") -> str:
     return f'<span class="status-pill status-{status}">{label}</span>'
 
 
+def _is_iata_code(value: str) -> bool:
+    return bool(re.fullmatch(r"[A-Z]{3}", value or ""))
+
+
 def render_header(provider_status: dict[str, Any]) -> None:
     load_custom_css()
     if provider_status["demo_mode"]:
         st.markdown(
-            '<div class="demo-banner">Modo demonstração: configure a Amadeus para buscar passagens reais.</div>',
+            '<div class="demo-banner">Modo demonstração: configure a Travelpayouts para buscar passagens reais.</div>',
             unsafe_allow_html=True,
         )
     st.markdown(
@@ -316,9 +323,9 @@ def render_sidebar(summary: dict, provider_status: dict[str, Any], db_connected:
     with st.sidebar:
         st.title("Radar de Passagens")
         st.caption("Painel de controle")
-        st.subheader("Nova busca")
+        st.subheader("Nova busca de passagem")
         with st.form("new_search_form", clear_on_submit=False):
-            origin = st.text_input("Partida/origem", "GRU").strip().upper()
+            origin = st.text_input("Origem", "BEL").strip().upper()
             destination = st.text_input("Destino", "LIS").strip().upper()
             departure = st.date_input("Data de ida", date.today() + timedelta(days=60))
             trip_label = st.selectbox("Tipo de viagem", list(TRIP_TYPE_OPTIONS.keys()), index=1)
@@ -327,17 +334,18 @@ def render_sidebar(summary: dict, provider_status: dict[str, Any], db_connected:
                 date.today() + timedelta(days=75),
                 disabled=TRIP_TYPE_OPTIONS[trip_label] == "one_way",
             )
-            passengers = st.number_input("Quantidade de passageiros", min_value=1, max_value=9, value=1)
+            adults = st.number_input("Adultos", min_value=1, max_value=9, value=1)
             max_price = st.number_input("Preço máximo desejado", min_value=100.0, value=3200.0, step=50.0)
-            currency = st.selectbox("Moeda", ["BRL", "USD", "EUR"])
+            currency = st.selectbox("Moeda", ["BRL", "USD", "EUR"], index=0)
             flexibility = st.selectbox("Flexibilidade de datas", list(FLEXIBILITY_OPTIONS.keys()))
             frequency_label_selected = st.selectbox("Frequência de busca automática", list(FREQUENCY_OPTIONS.keys()), index=1)
             telegram_enabled = st.toggle("Ativar alerta Telegram", value=bool(settings.telegram_bot_token and settings.telegram_chat_id))
-            submitted = st.form_submit_button("Iniciar monitoramento", type="primary", use_container_width=True)
+            search_now = st.form_submit_button("Buscar agora", use_container_width=True)
+            start_monitoring = st.form_submit_button("Iniciar monitoramento", type="primary", use_container_width=True)
 
-        if submitted:
-            if not origin or not destination:
-                st.error("Informe origem e destino para iniciar o monitoramento.")
+        if search_now or start_monitoring:
+            if not _is_iata_code(origin) or not _is_iata_code(destination):
+                st.error("Origem e destino devem ter exatamente 3 letras, como BEL ou LIS.")
             elif telegram_enabled and not (settings.telegram_bot_token and settings.telegram_chat_id):
                 st.warning("Telegram marcado, mas os secrets do Telegram ainda não estão configurados.")
             else:
@@ -349,15 +357,22 @@ def render_sidebar(summary: dict, provider_status: dict[str, Any], db_connected:
                         departure_date=departure,
                         return_date=return_date if TRIP_TYPE_OPTIONS[trip_label] == "round_trip" else None,
                         flexible_dates=FLEXIBILITY_OPTIONS[flexibility],
-                        passengers=int(passengers),
+                        adults=int(adults),
+                        passengers=int(adults),
                         max_price=float(max_price),
                         currency=currency,
                         trip_type=TRIP_TYPE_OPTIONS[trip_label],
                         baggage_included=False,
                         frequency_minutes=FREQUENCY_OPTIONS[frequency_label_selected],
+                        is_active=bool(start_monitoring),
                     )
                     db.add(search)
-                st.success("Monitoramento iniciado.")
+                    db.flush()
+                    saved = run_search_once(db, search)
+                if start_monitoring:
+                    st.success(f"Monitoramento iniciado. {saved} cotação(ões) salvas.")
+                else:
+                    st.success(f"Busca concluída. {saved} cotação(ões) salvas.")
                 st.rerun()
 
         st.divider()
@@ -366,8 +381,7 @@ def render_sidebar(summary: dict, provider_status: dict[str, Any], db_connected:
         status_rows = [
             ("Banco conectado", "Sim" if db_connected else "Não"),
             ("Provider ativo", provider_status["provider_label"]),
-            ("Modo", "Demo" if provider_status["demo_mode"] else "API real"),
-            ("Ambiente Amadeus", provider_status["amadeus_env"]),
+            ("Modo", "Demonstração" if provider_status["demo_mode"] else "Travelpayouts real"),
             ("Telegram configurado", "Sim" if telegram_ok else "Não"),
             ("Última busca executada", format_datetime(summary.get("latest_search"))),
             ("Buscas ativas", summary["active"]),
@@ -430,6 +444,7 @@ def render_overview(summary: dict, df: pd.DataFrame) -> None:
     ].copy()
     latest["ida"] = latest["ida"].map(format_date)
     latest["volta"] = latest["volta"].map(format_date)
+    latest["preço"] = latest["preço"].map(format_brl)
     latest["detectado_em"] = latest["detectado_em"].map(format_datetime)
     st.dataframe(latest, use_container_width=True, hide_index=True)
 
@@ -439,7 +454,7 @@ def render_opportunities(df: pd.DataFrame) -> None:
     if df.empty:
         st.info("Nenhuma passagem encontrada ainda. Use a sidebar para iniciar um monitoramento.")
         return
-    opportunity_df = df[df["oportunidade"] != "normal"].copy()
+    opportunity_df = df[~df["oportunidade"].isin(["normal", "Normal"])].copy()
     if opportunity_df.empty:
         st.info("Nenhuma oportunidade classificada como boa, ótima ou excelente até agora.")
         return
@@ -450,11 +465,14 @@ def render_opportunities(df: pd.DataFrame) -> None:
             alert_label = "Alerta enviado" if row["alerta"] not in {"-", "failed"} and not str(row["alerta"]).startswith("failed") else "Sem alerta"
             alert_class = "tag-alert" if alert_label == "Alerta enviado" else "tag-muted"
             economy = row["economia"] if row["economia"] is not None else 0
-            card_class = "opportunity-card excellent" if row["oportunidade"] in {"excelente_oportunidade", "oportunidade_rara"} else "opportunity-card"
+            card_class = "opportunity-card excellent" if row["oportunidade"] in {"excelente_oportunidade", "oportunidade_rara", "Ótima oportunidade", "Excelente oportunidade"} else "opportunity-card"
             tag_class = {
                 "boa_oportunidade": "tag-good",
                 "excelente_oportunidade": "tag-excellent",
                 "oportunidade_rara": "tag-great",
+                "Boa oportunidade": "tag-good",
+                "Ótima oportunidade": "tag-great",
+                "Excelente oportunidade": "tag-excellent",
             }.get(row["oportunidade"], "tag-muted")
             col.markdown(
                 f"""
@@ -463,7 +481,7 @@ def render_opportunities(df: pd.DataFrame) -> None:
                     <span class="tag {alert_class}">{alert_label}</span>
                     <div class="opportunity-route">{row['rota']}</div>
                     <div class="opportunity-detail">Ida: {format_date(row['ida'])} · Volta: {format_date(row['volta'])}</div>
-                    <div class="opportunity-price">{row['moeda']} {row['preço']:,.0f}</div>
+                    <div class="opportunity-price">{format_brl(row['preço'])}</div>
                     <div class="opportunity-detail">Preço máximo: {money(row['preço máximo'], row['moeda'])}</div>
                     <div class="opportunity-detail">Economia estimada: {money(economy, row['moeda'])}</div>
                     <div class="opportunity-detail">Score: {row['score']}/100</div>
@@ -535,6 +553,7 @@ def render_history(df: pd.DataFrame) -> None:
     ].copy()
     table["ida"] = table["ida"].map(format_date)
     table["volta"] = table["volta"].map(format_date)
+    table["preço"] = table["preço"].map(format_brl)
     table["detectado_em"] = table["detectado_em"].map(format_datetime)
     st.dataframe(table, use_container_width=True, hide_index=True)
 
@@ -547,56 +566,45 @@ def render_settings(provider_status: dict[str, Any], db_connected: bool) -> None
     database_configured = db_source == "DATABASE_URL"
     provider_rows = [
         {"configuração": "DATABASE_URL", "status": "Configurado" if database_configured else "Não configurado"},
-        {"configuração": "AMADEUS_CLIENT_ID", "status": "Configurado" if settings.amadeus_client_id else "Não configurado"},
-        {"configuração": "AMADEUS_CLIENT_SECRET", "status": "Configurado" if settings.amadeus_client_secret else "Não configurado"},
-        {"configuração": "AMADEUS_ENV", "status": settings.amadeus_env},
+        {"configuração": "TRAVELPAYOUTS_API_TOKEN", "status": "Configurado" if settings.travelpayouts_api_token else "Não configurado"},
         {"configuração": "TELEGRAM_BOT_TOKEN", "status": "Configurado" if settings.telegram_bot_token else "Não configurado"},
         {"configuração": "TELEGRAM_CHAT_ID", "status": "Configurado" if settings.telegram_chat_id else "Não configurado"},
         {"configuração": "Provider ativo", "status": provider_status["provider_label"]},
-        {"configuração": "Modo atual", "status": "Demo" if provider_status["demo_mode"] else "API real"},
+        {"configuração": "Modo atual", "status": "Demonstração" if provider_status["demo_mode"] else "Travelpayouts real"},
         {"configuração": "Banco", "status": "Conectado" if db_connected else "Indisponível"},
     ]
     st.dataframe(pd.DataFrame(provider_rows), use_container_width=True, hide_index=True)
-    if st.button("Testar conexão com Amadeus", type="primary"):
-        provider = AmadeusProvider()
-        try:
-            provider.get_access_token()
-        except AmadeusConfigurationError:
-            st.warning("Configure AMADEUS_CLIENT_ID e AMADEUS_CLIENT_SECRET antes de testar a conexão.")
-        except (AmadeusConnectionError, Exception):
-            st.error("Não foi possível conectar à Amadeus. Confira o ambiente e as credenciais configuradas.")
-        else:
-            st.success("Conexão com Amadeus realizada com sucesso.")
     st.markdown("**Como configurar secrets**")
     st.markdown(
         "Configure os secrets no Streamlit Cloud e também em `Settings > Secrets and variables > Actions` "
         "no GitHub para o robô agendado. O app nunca mostra os valores, apenas se eles existem."
     )
-    st.markdown("**Para ativar a API Amadeus:**")
+    st.markdown("**Para ativar a API Travelpayouts:**")
     st.markdown(
         """
-1. Crie uma conta no Amadeus for Developers.
-2. Crie um app em My Apps.
-3. Copie o Client ID e Client Secret.
-4. No Streamlit Cloud, vá em App > Settings > Secrets.
-5. Adicione:
+1. Crie ou acesse sua conta Travelpayouts.
+2. Copie seu API token.
+3. No Streamlit Cloud, vá em App > Settings > Secrets.
+4. Adicione:
         """
     )
     st.code(
-        """AMADEUS_CLIENT_ID = "seu_client_id"
-AMADEUS_CLIENT_SECRET = "seu_client_secret"
-AMADEUS_ENV = "test" """,
+        """TRAVELPAYOUTS_API_TOKEN = "seu_token"
+TELEGRAM_BOT_TOKEN = "seu_bot_token"
+TELEGRAM_CHAT_ID = "seu_chat_id" """,
         language="toml",
     )
-    st.markdown("6. Salve e reinicie o app.")
+    st.markdown(
+        """
+5. Salve e reinicie o app.
+6. O modo atual deve mudar de demonstração para Travelpayouts real.
+        """
+    )
+    st.markdown("**Secrets esperados**")
     st.code(
         """DATABASE_URL
 APP_PASSWORD
-AMADEUS_CLIENT_ID
-AMADEUS_CLIENT_SECRET
-AMADEUS_ENV
-KIWI_API_KEY
-TRAVELPAYOUTS_TOKEN
+TRAVELPAYOUTS_API_TOKEN
 TELEGRAM_BOT_TOKEN
 TELEGRAM_CHAT_ID
 SMTP_HOST
