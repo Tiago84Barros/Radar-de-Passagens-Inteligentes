@@ -50,6 +50,64 @@ _NATIONAL_GRADIENT = "linear-gradient(135deg, #0d3b2e 0%, #0a3347 60%, #07263a 1
 # International gradient fallback
 _INTL_GRADIENT = "linear-gradient(135deg, #1a1060 0%, #2d1b69 60%, #0f0a3a 100%)"
 
+# Airport names by IATA. Kept separate from DESTINATIONS so we don't have to
+# edit every entry; get_destination_info() merges this in as 'airport_name'.
+AIRPORT_NAMES: dict[str, str] = {
+    # Nacional
+    "GRU": "Aeroporto de Guarulhos",
+    "CGH": "Aeroporto de Congonhas",
+    "VCP": "Aeroporto de Viracopos",
+    "GIG": "Aeroporto do Galeão",
+    "SDU": "Aeroporto Santos Dumont",
+    "BSB": "Aeroporto de Brasília",
+    "SSA": "Aeroporto de Salvador",
+    "REC": "Aeroporto do Recife / Guararapes",
+    "FOR": "Aeroporto de Fortaleza / Pinto Martins",
+    "FLN": "Aeroporto de Florianópolis / Hercílio Luz",
+    "MAO": "Aeroporto de Manaus / Eduardo Gomes",
+    "BEL": "Aeroporto de Belém / Val de Cans",
+    "IGU": "Aeroporto de Foz do Iguaçu",
+    "CWB": "Aeroporto de Curitiba / Afonso Pena",
+    "POA": "Aeroporto de Porto Alegre / Salgado Filho",
+    "CNF": "Aeroporto de Confins / Tancredo Neves",
+    "PLU": "Aeroporto da Pampulha",
+    "NAT": "Aeroporto de Natal / São Gonçalo",
+    "MCZ": "Aeroporto de Maceió / Zumbi dos Palmares",
+    "VIX": "Aeroporto de Vitória / Eurico Salles",
+    "PMW": "Aeroporto de Palmas",
+    "GYN": "Aeroporto de Goiânia / Santa Genoveva",
+    "CGB": "Aeroporto de Cuiabá / Marechal Rondon",
+    "CGR": "Aeroporto de Campo Grande",
+    "SLZ": "Aeroporto de São Luís / Marechal Cunha Machado",
+    "THE": "Aeroporto de Teresina / Senador Petrônio Portella",
+    "JPA": "Aeroporto de João Pessoa / Castro Pinto",
+    "AJU": "Aeroporto de Aracaju / Santa Maria",
+    "BPS": "Aeroporto de Porto Seguro",
+    "IOS": "Aeroporto de Ilhéus / Jorge Amado",
+    # Internacional
+    "LIS": "Aeroporto de Lisboa / Humberto Delgado",
+    "OPO": "Aeroporto do Porto / Francisco Sá Carneiro",
+    "CDG": "Aeroporto Charles de Gaulle",
+    "ORY": "Aeroporto de Paris-Orly",
+    "LHR": "Aeroporto de Heathrow",
+    "LGW": "Aeroporto de Gatwick",
+    "EZE": "Aeroporto de Ezeiza / Ministro Pistarini",
+    "AEP": "Aeroporto Jorge Newbery / Aeroparque",
+    "SCL": "Aeroporto de Santiago / Arturo Merino Benítez",
+    "MIA": "Aeroporto Internacional de Miami",
+    "MCO": "Aeroporto Internacional de Orlando",
+    "JFK": "Aeroporto John F. Kennedy",
+    "EWR": "Aeroporto de Newark Liberty",
+    "FCO": "Aeroporto de Fiumicino / Leonardo da Vinci",
+    "MAD": "Aeroporto Adolfo Suárez / Barajas",
+    "BCN": "Aeroporto de Barcelona / El Prat",
+    "CUN": "Aeroporto Internacional de Cancún",
+    "BOG": "Aeroporto El Dorado",
+    "LIM": "Aeroporto Jorge Chávez",
+    "DXB": "Aeroporto Internacional de Dubai",
+    "NRT": "Aeroporto de Narita",
+}
+
 
 DESTINATIONS: dict[str, dict] = {
     # ─────────────────────────────────────────────────────
@@ -475,12 +533,15 @@ def get_destination_info(iata: str) -> dict:
     so every destination card always renders a postcard image."""
     iata = (iata or "").upper().strip()
     if iata in DESTINATIONS:
-        return DESTINATIONS[iata]
+        info = dict(DESTINATIONS[iata])
+        info.setdefault("airport_name", AIRPORT_NAMES.get(iata, ""))
+        return info
     is_national = iata in BRAZIL_IATAS
     return {
         "city": iata,
         "country": "Brasil" if is_national else "Internacional",
         "iata": iata,
+        "airport_name": AIRPORT_NAMES.get(iata, ""),
         "category": "national" if is_national else "international",
         "image_url": _fallback_image(iata, is_national),
         "postcard_label": iata,

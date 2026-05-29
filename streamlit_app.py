@@ -22,6 +22,10 @@ from app.monitor import run_due_searches, run_search_once
 from app.settings import get_settings
 from app.styles import load_custom_css
 from components.cards import render_airline_comparison, render_deal_cards_section, render_origin_card
+from components.airport_cards import render_airport_cards
+from components.fare_cards import render_fare_cards
+from components.charts import render_current_prices_bar, render_future_projection
+from components.monitor_prompt import render_monitor_prompt
 from data.destinations_catalog import BRAZIL_IATAS, get_destination_info
 from providers.travelpayouts_provider import TravelPayoutsProvider, TravelPayoutsProviderError
 from services.air_network import find_candidate_hubs, hub_route_label
@@ -526,6 +530,14 @@ def render_sidebar(summary: dict, provider_status: dict[str, Any], db_connected:
         elif not origin_input:
             st.session_state.pop("home_origin", None)
 
+        if selected_destination is not None:
+            st.session_state["home_destination"] = {
+                "code": selected_destination.code,
+                "label": selected_destination.label,
+            }
+        elif not destination_input:
+            st.session_state.pop("home_destination", None)
+
         with st.form("new_search_form", clear_on_submit=False):
             departure = st.date_input("Data de ida", value=None, format="DD/MM/YYYY")
             trip_label = st.selectbox("Tipo de viagem", list(TRIP_TYPE_OPTIONS.keys()), index=1)
@@ -785,10 +797,92 @@ def render_home_origin_card() -> None:
     )
 
 
+def _home_route_dict(origin_code: str, dest_code: str, last_ctx: dict) -> dict:
+    """Assemble the route dict used by the monitor button and the future
+    projection chart, taking dates from the last search context when available."""
+    matches = (
+        str(last_ctx.get("origin_code") or "").upper() == origin_code
+        and str(last_ctx.get("destination_code") or "").upper() == dest_code
+    )
+    return {
+        "origin_code": origin_code,
+        "destination_code": dest_code,
+        "departure_date": last_ctx.get("departure_date") if matches else None,
+        "return_date": last_ctx.get("return_date") if matches else None,
+        "adults": 1,
+        "max_price": 3200.0,
+        "currency": "BRL",
+        "trip_type": "round_trip",
+        "frequency_minutes": 60,
+    }
+
+
+def _empty_state(message: str) -> None:
+    st.markdown(
+        f'<div class="home-empty">{message}</div>',
+        unsafe_allow_html=True,
+    )
+
+
 def render_home_tab(summary: dict, df_quotes: pd.DataFrame, provider_status: dict) -> None:
-    """Home screen. Starts empty (only the origin postcard once an origin is
-    chosen). The richer panels are being rebuilt step by step."""
-    render_home_origin_card()
+    """Home screen orchestration.
+
+    Flow (driven by the sidebar pickers):
+      • no origin            → elegant empty state.
+      • origin only          → origin postcard + "choose destination" hint.
+      • origin + destination → both postcards. Before a search, a "click Buscar
+        agora" hint; after a search, the fare cards, price-comparison bar chart,
+        future-projection chart and the "Monitorar esta rota 24h" button.
+    """
+    origin = st.session_state.get("home_origin") or {}
+    destination = st.session_state.get("home_destination") or {}
+    origin_code = str(origin.get("code") or "").upper()
+    dest_code = str(destination.get("code") or "").upper()
+
+    if not origin_code:
+        _empty_state("🧭 Escolha uma origem e um destino na lateral para iniciar o radar.")
+        return
+
+    # Origin (and destination, if chosen) postcards.
+    render_airport_cards(origin_code, dest_code or None)
+
+    if not dest_code:
+        _empty_state("📍 Agora escolha o destino para comparar oportunidades.")
+        return
+
+    last_ctx = st.session_state.get("last_route_context") or {}
+    searched = (
+        str(last_ctx.get("origin_code") or "").upper() == origin_code
+        and str(last_ctx.get("destination_code") or "").upper() == dest_code
+    )
+    deals = get_airline_comparison(df_quotes, origin_code, dest_code)
+
+    # Both chosen but no search yet and no quotes collected for the route.
+    if not searched and not deals:
+        _empty_state("🔍 Clique em <strong>Buscar agora</strong> para consultar as melhores tarifas.")
+        return
+
+    st.divider()
+
+    # Best fare per airline (cheapest highlighted). Handles its own empty state.
+    render_fare_cards(deals)
+
+    if deals:
+        st.divider()
+        render_current_prices_bar(deals)
+
+    # Future 12-month projection (real data when available, else a clearly
+    # marked simulation seeded from the cheapest current fare).
+    base_price = None
+    if deals:
+        prices = [float(d.get("price_brl") or 0) for d in deals if (d.get("price_brl") or 0) > 0]
+        base_price = min(prices) if prices else None
+    st.divider()
+    render_future_projection(df_quotes, origin_code, dest_code, base_price)
+
+    # "Monitorar esta rota 24h" with keep/replace/cancel conflict handling.
+    st.divider()
+    render_monitor_prompt(_home_route_dict(origin_code, dest_code, last_ctx))
 
 
 # ─── Tab: Oportunidades ───────────────────────────────────────────────────────

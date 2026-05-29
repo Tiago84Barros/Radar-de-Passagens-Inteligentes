@@ -977,6 +977,158 @@ a.buy-link {
     box-shadow: 0 16px 32px rgba(0,0,0,.18);
 }
 
+/* ── Home empty states ───────────────────────────────────────── */
+.home-empty {
+    margin: 26px 0;
+    padding: 30px 26px;
+    border: 1px dashed rgba(148,163,184,.32);
+    border-radius: var(--radar-card-radius);
+    background: rgba(148,163,184,.05);
+    color: var(--radar-muted);
+    font-size: 1.04rem;
+    line-height: 1.5;
+    text-align: center;
+}
+.home-empty strong { color: var(--radar-ink); }
+
+/* ── Airport postcards (origin / destination) ────────────────── */
+.airport-card {
+    position: relative;
+    min-height: 220px;
+    border-radius: var(--radar-card-radius);
+    background-size: cover;
+    background-position: center;
+    overflow: hidden;
+    border: 1px solid rgba(148,163,184,.16);
+    box-shadow: 0 10px 28px rgba(3,8,18,.45);
+    margin-bottom: 8px;
+}
+.airport-card-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    gap: 2px;
+    padding: 18px 20px;
+}
+.airport-card-badge {
+    align-self: flex-start;
+    font-size: .74rem;
+    font-weight: 800;
+    letter-spacing: .02em;
+    padding: 4px 11px;
+    border-radius: 999px;
+    margin-bottom: auto;
+    backdrop-filter: blur(3px);
+}
+.badge-origin { background: rgba(45,212,191,.85); color: #06241f; }
+.badge-dest   { background: rgba(251,191,36,.88); color: #2a1c00; }
+.airport-card-code {
+    font-size: 2rem;
+    font-weight: 900;
+    color: #fff;
+    letter-spacing: .04em;
+    line-height: 1.05;
+}
+.airport-card-city {
+    font-size: 1.18rem;
+    font-weight: 800;
+    color: #fff;
+}
+.airport-card-country {
+    font-size: .9rem;
+    color: rgba(248,250,252,.82);
+}
+.airport-card-name {
+    font-size: .84rem;
+    color: rgba(248,250,252,.72);
+    margin-top: 2px;
+}
+
+/* ── Fare cards (best price per airline) ─────────────────────── */
+.fare-cards-grid {
+    display: grid;
+    gap: 14px;
+    align-items: stretch;
+    margin: 4px 0 6px 0;
+}
+.fare-card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 18px;
+    border-radius: 14px;
+    background: rgba(20,32,50,.72);
+    border: 1px solid rgba(148,163,184,.16);
+    box-shadow: 0 6px 18px rgba(3,8,18,.34);
+}
+.fare-card-cheapest {
+    border: 1.5px solid var(--radar-teal);
+    box-shadow: 0 0 0 1px var(--radar-teal-soft), 0 10px 26px rgba(45,212,191,.16);
+    background: linear-gradient(180deg, rgba(45,212,191,.08), rgba(20,32,50,.72));
+}
+.fare-card-best {
+    align-self: flex-start;
+    font-size: .74rem;
+    font-weight: 800;
+    color: #06241f;
+    background: var(--radar-teal);
+    padding: 3px 10px;
+    border-radius: 999px;
+    margin-bottom: 2px;
+}
+.fare-card-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.fare-card-airline { font-weight: 800; color: var(--radar-ink); font-size: 1.02rem; }
+.fare-badge {
+    margin-left: auto;
+    font-size: .72rem;
+    font-weight: 800;
+    padding: 3px 9px;
+    border-radius: 999px;
+}
+.fare-card-route { font-weight: 700; color: var(--radar-ink); font-size: .98rem; }
+.fare-card-route-iata { font-size: .8rem; color: var(--radar-muted); letter-spacing: .03em; }
+.fare-card-dates { font-size: .86rem; color: var(--radar-muted); }
+.fare-card-price { font-size: 1.7rem; font-weight: 900; color: var(--radar-teal); letter-spacing: -.01em; }
+.fare-card-miles { font-size: .9rem; color: #E5EDF8; }
+.fare-card-meta { font-size: .85rem; color: var(--radar-muted); }
+.fare-card-foot { font-size: .78rem; color: var(--radar-muted); }
+.fare-card-note {
+    font-size: .8rem;
+    color: #FBBF24;
+    background: rgba(251,191,36,.1);
+    border-radius: 8px;
+    padding: 6px 9px;
+}
+.fare-card-btn {
+    margin-top: auto;
+    display: inline-block;
+    text-align: center;
+    text-decoration: none;
+    font-weight: 800;
+    font-size: .9rem;
+    padding: 9px 12px;
+    border-radius: 10px;
+    background: var(--radar-teal);
+    color: #06241f !important;
+    transition: filter .15s ease;
+}
+.fare-card-btn:hover { filter: brightness(1.08); }
+
+/* ── Monitor conflict prompt ─────────────────────────────────── */
+.monitor-conflict {
+    margin: 8px 0 12px 0;
+    padding: 16px 18px;
+    border-radius: 12px;
+    border: 1px solid rgba(251,191,36,.34);
+    background: rgba(251,191,36,.08);
+    color: var(--radar-ink);
+    font-size: .96rem;
+    line-height: 1.5;
+}
+
 /* ── Responsive ──────────────────────────────────────────────── */
 @media (max-width: 900px) {
     .top-shell { display: block; }
@@ -988,6 +1140,7 @@ a.buy-link {
     .deal-card-header { height: 150px; }
     .deal-cards-grid { grid-template-columns: 1fr !important; }
     .airline-cmp-grid { grid-template-columns: 1fr 1fr !important; }
+    .fare-cards-grid { grid-template-columns: 1fr !important; }
 }
 </style>
 """
