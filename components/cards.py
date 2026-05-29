@@ -319,7 +319,12 @@ def render_deal_cards_section(
         )
 
     if not deals:
-        st.info("Nenhuma oportunidade encontrada para esta categoria.")
+        st.markdown(
+            '<div class="dados-ausentes">📭 <strong>Dados Ausentes</strong><br>'
+            '<span>Nenhuma cotação real coletada para esta categoria ainda. '
+            'Cadastre uma busca e aguarde o monitor coletar os preços.</span></div>',
+            unsafe_allow_html=True,
+        )
         return
 
     # All cards rendered as one HTML block — avoids Streamlit column/markdown fragmentation

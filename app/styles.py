@@ -278,6 +278,27 @@ CSS = """
     margin-bottom: .5rem;
 }
 
+/* ── "Dados Ausentes" placeholder (no real data collected yet) ── */
+.dados-ausentes {
+    border: 1px dashed var(--radar-line);
+    background: rgba(255,255,255,0.02);
+    border-radius: var(--radar-card-radius);
+    padding: 1.25rem 1rem;
+    text-align: center;
+    color: var(--radar-muted, #94a3b8);
+    margin: .25rem 0 1rem;
+}
+.dados-ausentes strong {
+    color: #e2e8f0;
+    font-size: 1.05rem;
+}
+.dados-ausentes span {
+    display: block;
+    margin-top: .35rem;
+    font-size: .85rem;
+    line-height: 1.4;
+}
+
 /* ── Deal cards (home screen opportunities) ───────────────────── */
 .deal-card {
     border: 1px solid var(--radar-line);

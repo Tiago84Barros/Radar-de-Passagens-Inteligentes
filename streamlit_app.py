@@ -648,17 +648,17 @@ def render_home_metrics(summary: dict, df: pd.DataFrame) -> None:
     intl_lowest = get_international_lowest(df)
     best_miles = get_best_miles_deal(df)
 
-    best_miles_label = "–"
+    best_miles_label = "Dados Ausentes"
     if best_miles:
         miles = best_miles.get("estimated_miles") or 0
-        best_miles_label = format_miles(miles) if miles else "–"
+        best_miles_label = format_miles(miles) if miles else "Dados Ausentes"
 
     render_metric_cards(
         [
             ("Buscas ativas", metrics_base["active"], "Rotinas em monitoramento", "Online"),
             ("Oportunidades", metrics_base["opportunities"], "Boas, ótimas e excelentes", "Score ativo"),
-            ("Menor preço nacional", money(nat_lowest) if nat_lowest else "–", "Menor tarifa Brasil", "Nacional"),
-            ("Menor preço internacional", money(intl_lowest) if intl_lowest else "–", "Menor tarifa exterior", "Internacional"),
+            ("Menor preço nacional", money(nat_lowest) if nat_lowest else "Dados Ausentes", "Menor tarifa Brasil", "Nacional"),
+            ("Menor preço internacional", money(intl_lowest) if intl_lowest else "Dados Ausentes", "Menor tarifa exterior", "Internacional"),
             ("Melhor em milhas", best_miles_label, "Estimativa base R$0,035/milha", "Milhas"),
             ("Alertas enviados", metrics_base["alerts"], "Telegram / e-mail", "Histórico"),
         ],
@@ -697,26 +697,21 @@ def render_home_tab(summary: dict, df_quotes: pd.DataFrame, provider_status: dic
             render_airline_comparison(comparison, route_label=route_label)
 
     with st.spinner("Carregando oportunidades..."):
-        national_deals, intl_deals = get_home_deals(df_quotes, cents_per_mile=DEFAULT_CENTS_PER_MILE)
-
-    is_demo_mode = provider_status.get("demo_mode", True)
-    demo_note = ""
-    if is_demo_mode:
-        demo_note = (
-            "Configure o token Travelpayouts para ver passagens reais. "
-            "Abaixo estão exemplos ilustrativos de oportunidades."
+        # fill_demo=False → só dados reais coletados; gaps viram "Dados Ausentes"
+        national_deals, intl_deals = get_home_deals(
+            df_quotes, cents_per_mile=DEFAULT_CENTS_PER_MILE, fill_demo=False
         )
 
     render_deal_cards_section(
         title="✈️ Passagens baratas pelo Brasil",
-        subtitle=demo_note or "Melhores oportunidades nacionais — diretas e via conexões.",
+        subtitle="Melhores oportunidades nacionais — diretas e via conexões.",
         deals=national_deals,
         per_row=3,
     )
 
     render_deal_cards_section(
         title="🌎 Passagens baratas para o exterior",
-        subtitle=demo_note or "Melhores oportunidades internacionais — diretas e via conexões.",
+        subtitle="Melhores oportunidades internacionais — diretas e via conexões.",
         deals=intl_deals,
         per_row=3,
     )
@@ -979,8 +974,12 @@ def render_miles_tab(df: pd.DataFrame) -> None:
     st.caption(f"Fórmula: milhas = preço em R$ ÷ {cents_per_mile:.3f}".replace(".", ","))
 
     if df.empty:
-        st.info("Sem cotações disponíveis. Inicie um monitoramento na sidebar para ver estimativas de milhas.")
-        _render_miles_demo_table(cents_per_mile)
+        st.markdown(
+            '<div class="dados-ausentes">📭 <strong>Dados Ausentes</strong><br>'
+            '<span>Nenhuma cotação real coletada ainda. Cadastre uma busca na sidebar e '
+            'aguarde o monitor coletar os preços para ver as estimativas de milhas.</span></div>',
+            unsafe_allow_html=True,
+        )
         return
 
     miles_df = df.copy()
@@ -1019,37 +1018,6 @@ def render_miles_tab(df: pd.DataFrame) -> None:
     display.columns = ["Rota", "Data ida", "Companhia", "Preço R$", "Milhas estimadas", "Classificação", "Provider"]
     display["Data ida"] = display["Data ida"].map(format_date)
     st.dataframe(display, use_container_width=True, hide_index=True)
-
-    _render_miles_demo_table(cents_per_mile)
-
-
-def _render_miles_demo_table(cents_per_mile: float) -> None:
-    """Show a reference table of example prices vs miles."""
-    st.write("")
-    st.subheader("Tabela de referência: preço × milhas estimadas")
-    st.caption(f"Baseado em R$ {cents_per_mile:.3f}/milha (ajuste o slider acima para recalcular)".replace(".", ","))
-    refs = [
-        ("GRU → LIS", "São Paulo → Lisboa", 1_899.00),
-        ("GRU → MIA", "São Paulo → Miami", 2_199.00),
-        ("GIG → CDG", "Rio → Paris", 2_499.00),
-        ("GRU → JFK", "São Paulo → Nova York", 2_599.00),
-        ("GIG → FOR", "Rio → Fortaleza", 459.90),
-        ("GRU → SSA", "São Paulo → Salvador", 479.00),
-        ("CGH → BSB", "São Paulo → Brasília", 339.00),
-        ("FOR → REC", "Fortaleza → Recife", 289.00),
-        ("GRU → EZE", "São Paulo → Buenos Aires", 1_299.00),
-        ("GIG → SCL", "Rio → Santiago", 1_499.00),
-    ]
-    rows = []
-    for route, desc, price in refs:
-        miles = estimate_miles(price, cents_per_mile)
-        rows.append({
-            "Rota": route,
-            "Descrição": desc,
-            "Preço (R$)": format_brl(price),
-            "Milhas estimadas": format_miles(miles),
-        })
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
 # ─── Tab: Configurações ───────────────────────────────────────────────────────

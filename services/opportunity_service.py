@@ -88,11 +88,15 @@ def get_home_deals(
     cents_per_mile: float = DEFAULT_CENTS_PER_MILE,
     national_limit: int = 5,
     international_limit: int = 5,
+    fill_demo: bool = True,
 ) -> tuple[list[dict], list[dict]]:
     """
     Return (national_deals, international_deals) for the home screen.
 
-    Uses real DB quotes when available; fills gaps with demo data.
+    Uses real DB quotes when available. When ``fill_demo`` is True, gaps are
+    filled with demo data (legacy behaviour, kept for tests). When False, only
+    real quotes are returned so the UI can render "Dados Ausentes" — this is the
+    mode the app uses, to make the screen reflect only real collected data.
     Each deal is enriched with destination info and miles estimation.
     """
     national: list[dict] = []
@@ -127,15 +131,16 @@ def get_home_deals(
                 if len(national) >= national_limit and len(international) >= international_limit:
                     break
 
-    # Fill gaps with demo data
-    demo_nat = [_enrich_demo(d, cents_per_mile) for d in get_demo_national_deals()]
-    demo_int = [_enrich_demo(d, cents_per_mile) for d in get_demo_international_deals()]
+    # Fill gaps with demo data only when explicitly allowed (legacy / tests).
+    if fill_demo:
+        demo_nat = [_enrich_demo(d, cents_per_mile) for d in get_demo_national_deals()]
+        demo_int = [_enrich_demo(d, cents_per_mile) for d in get_demo_international_deals()]
 
-    while len(national) < national_limit and demo_nat:
-        national.append(demo_nat.pop(0))
+        while len(national) < national_limit and demo_nat:
+            national.append(demo_nat.pop(0))
 
-    while len(international) < international_limit and demo_int:
-        international.append(demo_int.pop(0))
+        while len(international) < international_limit and demo_int:
+            international.append(demo_int.pop(0))
 
     return national[:national_limit], international[:international_limit]
 
