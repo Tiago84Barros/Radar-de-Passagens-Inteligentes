@@ -190,6 +190,14 @@ CSS = """
     line-height: 1.45;
 }
 
+/* ── Deal cards grid ─────────────────────────────────────────── */
+.deal-cards-grid {
+    display: grid;
+    gap: 1rem;
+    align-items: start;
+    margin-bottom: .5rem;
+}
+
 /* ── Deal cards (home screen opportunities) ───────────────────── */
 .deal-card {
     border: 1px solid var(--radar-line);
@@ -622,6 +630,7 @@ a.buy-link {
     .route-postcard-title { display: grid; gap: 8px; }
     .route-arrow { width: fit-content; }
     .deal-card-header { height: 150px; }
+    .deal-cards-grid { grid-template-columns: 1fr !important; }
 }
 </style>
 """
