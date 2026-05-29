@@ -21,12 +21,13 @@ except ImportError:
 from app.monitor import run_due_searches, run_search_once
 from app.settings import get_settings
 from app.styles import load_custom_css
-from components.cards import render_deal_cards_section
+from components.cards import render_airline_comparison, render_deal_cards_section
 from data.destinations_catalog import BRAZIL_IATAS
 from providers.travelpayouts_provider import TravelPayoutsProvider, TravelPayoutsProviderError
 from services.air_network import find_candidate_hubs, hub_route_label
 from services.miles_service import DEFAULT_CENTS_PER_MILE, estimate_miles, format_miles
 from services.opportunity_service import (
+    get_airline_comparison,
     get_best_miles_deal,
     get_home_deals,
     get_international_lowest,
@@ -638,6 +639,18 @@ def render_home_tab(summary: dict, df_quotes: pd.DataFrame, provider_status: dic
         unsafe_allow_html=True,
     )
     st.write("")
+
+    # ── Per-airline comparison for the last searched route ────────────────
+    last_ctx = st.session_state.get("last_route_context") or {}
+    cmp_origin = str(last_ctx.get("origin_code") or "")
+    cmp_dest = str(last_ctx.get("destination_code") or "")
+    if cmp_origin and cmp_dest:
+        comparison = get_airline_comparison(
+            df_quotes, cmp_origin, cmp_dest, cents_per_mile=DEFAULT_CENTS_PER_MILE
+        )
+        if comparison:
+            route_label = f"{last_ctx.get('origin_label', cmp_origin)} → {last_ctx.get('destination_label', cmp_dest)}"
+            render_airline_comparison(comparison, route_label=route_label)
 
     with st.spinner("Carregando oportunidades..."):
         national_deals, intl_deals = get_home_deals(df_quotes, cents_per_mile=DEFAULT_CENTS_PER_MILE)

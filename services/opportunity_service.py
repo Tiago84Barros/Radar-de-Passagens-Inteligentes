@@ -140,6 +140,56 @@ def get_home_deals(
     return national[:national_limit], international[:international_limit]
 
 
+def get_airline_comparison(
+    df_quotes: pd.DataFrame,
+    origin: str,
+    destination: str,
+    cents_per_mile: float = DEFAULT_CENTS_PER_MILE,
+) -> list[dict]:
+    """
+    Return the cheapest deal per airline for a specific route, sorted
+    ascending by price (cheapest first). Each deal is enriched with miles.
+
+    Used by the home-screen airline comparison card. Returns [] when there
+    are no quotes for the route yet.
+    """
+    if df_quotes.empty or "preço" not in df_quotes.columns:
+        return []
+
+    o = (origin or "").upper()
+    d = (destination or "").upper()
+    route = df_quotes.dropna(subset=["preço"]).copy()
+    route = route[
+        (route["origem"].astype(str).str.upper() == o)
+        & (route["destino"].astype(str).str.upper() == d)
+        & (route["preço"] > 0)
+    ]
+    if route.empty:
+        return []
+
+    # Keep only future or undated quotes
+    if "ida" in route.columns:
+        today = pd.Timestamp(date.today())
+        route["_dep_dt"] = pd.to_datetime(route["ida"], errors="coerce")
+        route = route[route["_dep_dt"].isna() | (route["_dep_dt"] >= today)]
+    if route.empty:
+        return []
+
+    # Normalize airline label so "" / NaN don't collapse into one bogus group
+    route["_airline"] = route["companhia"].fillna("").astype(str).str.strip()
+    route.loc[route["_airline"] == "", "_airline"] = "Não informada"
+
+    cheapest_idx = route.groupby("_airline")["preço"].idxmin()
+    cheapest = route.loc[cheapest_idx].sort_values("preço")
+
+    deals: list[dict] = []
+    for _, row in cheapest.iterrows():
+        deal = _df_row_to_deal(row)
+        deal = enrich_deal_with_miles(deal, cents_per_mile)
+        deals.append(deal)
+    return deals
+
+
 def get_national_lowest(df_quotes: pd.DataFrame) -> float | None:
     """Return the lowest national price from the quotes DataFrame."""
     if df_quotes.empty or "preço" not in df_quotes.columns:

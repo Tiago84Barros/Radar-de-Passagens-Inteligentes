@@ -195,6 +195,101 @@ def _build_card_html(deal: dict) -> str:
     )
 
 
+# ─── airline comparison (per-airline cheapest) ──────────────────────────────
+
+_AIRLINE_DIRECTORY: dict[str, str] = {
+    "LA": "LATAM", "JJ": "LATAM", "G3": "GOL", "AD": "Azul", "TP": "TAP",
+    "IB": "Iberia", "AF": "Air France", "AA": "American", "UA": "United",
+    "AV": "Avianca", "CM": "Copa", "DL": "Delta", "KL": "KLM",
+    "LH": "Lufthansa", "EK": "Emirates", "AR": "Aerolíneas",
+}
+_NAME_TO_CODE: dict[str, str] = {name.lower(): code for code, name in _AIRLINE_DIRECTORY.items()}
+_NAME_TO_CODE.update({"latam": "LA", "gol": "G3", "azul": "AD"})
+
+
+def _airline_visual(airline: str) -> tuple[str, str]:
+    """Return (display_name, logo_html) for an airline name or IATA code."""
+    raw = (airline or "").strip()
+    if not raw or raw.lower() in {"não informada", "nao informada"}:
+        return "Companhia não informada", '<span class="airline-logo-fallback">✈️</span>'
+    if "+" in raw or "via" in raw.lower():
+        return raw, '<span class="airline-logo-fallback">🔗</span>'
+
+    up = raw.upper()
+    code = None
+    name = raw
+    if up in _AIRLINE_DIRECTORY:
+        code, name = up, _AIRLINE_DIRECTORY[up]
+    else:
+        low = raw.lower()
+        for nm, cd in _NAME_TO_CODE.items():
+            if nm in low:
+                code, name = cd, _AIRLINE_DIRECTORY.get(cd, raw)
+                break
+    if code:
+        logo = (
+            f'<img class="airline-logo" src="https://pics.avs.io/120/40/{code}.png" '
+            f'alt="{name}" loading="lazy" '
+            f'onerror="this.style.display=&#39;none&#39;">'
+        )
+        return name, logo
+    return raw, '<span class="airline-logo-fallback">✈️</span>'
+
+
+def render_airline_comparison(deals: list[dict], route_label: str = "") -> None:
+    """Render a per-airline price comparison, cheapest first, with logos."""
+    if not deals:
+        return
+
+    title = "💺 Comparativo por companhia"
+    if route_label:
+        title += f" — {route_label}"
+    st.markdown(f'<div class="deals-section-header">{title}</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<p class="deals-section-subtitle">Menor preço encontrado em cada companhia. '
+        'A mais barata aparece primeiro, marcada como <strong>melhor escolha</strong>.</p>',
+        unsafe_allow_html=True,
+    )
+
+    cards: list[str] = []
+    for i, deal in enumerate(deals):
+        name, logo = _airline_visual(str(deal.get("airline") or ""))
+        price = _fmt_brl(float(deal.get("price_brl") or 0))
+        miles = format_miles(deal.get("estimated_miles") or 0)
+        is_best = i == 0
+        best_badge = '<span class="airline-best-badge">★ Melhor escolha</span>' if is_best else ""
+        best_cls = " airline-cmp-card-best" if is_best else ""
+        demo_tag = '<span class="airline-demo-tag">demo</span>' if deal.get("is_demo") else ""
+
+        link = str(deal.get("booking_link") or "")
+        if link and link != "#":
+            btn = f'<a class="airline-cmp-btn" href="{link}" target="_blank" rel="noopener">Ver voo →</a>'
+        else:
+            btn = '<a class="airline-cmp-btn" href="https://www.google.com/flights" target="_blank" rel="noopener">Buscar →</a>'
+
+        cards.append(
+            f'<div class="airline-cmp-card{best_cls}">'
+            f'<div class="airline-cmp-top">{logo}{best_badge}</div>'
+            f'<div class="airline-cmp-name">{name}{demo_tag}</div>'
+            f'<div class="airline-cmp-price">{price}</div>'
+            f'<div class="airline-cmp-miles">🏆 {miles} <span class="miles-est-tag">est.*</span></div>'
+            f'{btn}'
+            f'</div>'
+        )
+
+    per_row = min(len(cards), 4)
+    st.markdown(
+        f'<div class="airline-cmp-grid" style="grid-template-columns:repeat({per_row},1fr);">'
+        f'{"".join(cards)}</div>',
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        "* Milhas estimadas com base em R$ 0,035/milha. "
+        "Não representa disponibilidade real em programas de fidelidade."
+    )
+    st.write("")
+
+
 def render_deal_card(deal: dict) -> None:
     """Render a single deal card — wraps in a 1-column grid so CSS applies correctly."""
     st.markdown(

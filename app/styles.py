@@ -190,6 +190,86 @@ CSS = """
     line-height: 1.45;
 }
 
+/* ── Airline comparison cards ────────────────────────────────── */
+.airline-cmp-grid {
+    display: grid;
+    gap: .85rem;
+    align-items: stretch;
+    margin-bottom: .5rem;
+}
+.airline-cmp-card {
+    border: 1px solid var(--radar-line);
+    background: var(--radar-panel);
+    border-radius: 14px;
+    padding: 14px 16px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    transition: transform .16s ease, border-color .16s ease;
+}
+.airline-cmp-card:hover {
+    transform: translateY(-2px);
+    border-color: rgba(45,212,191,.38);
+}
+.airline-cmp-card-best {
+    border-color: var(--radar-teal);
+    background: linear-gradient(180deg, rgba(45,212,191,.10), var(--radar-panel) 60%);
+    box-shadow: 0 14px 34px rgba(45,212,191,.14);
+}
+.airline-cmp-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 40px;
+}
+.airline-logo { height: 34px; width: auto; object-fit: contain; }
+.airline-logo-fallback { font-size: 1.6rem; }
+.airline-best-badge {
+    background: var(--radar-teal);
+    color: #06231d;
+    font-size: .66rem;
+    font-weight: 800;
+    padding: 2px 8px;
+    border-radius: 999px;
+    letter-spacing: .02em;
+    white-space: nowrap;
+}
+.airline-cmp-name {
+    color: var(--radar-ink);
+    font-size: .98rem;
+    font-weight: 750;
+}
+.airline-demo-tag {
+    color: var(--radar-amber);
+    font-size: .64rem;
+    border: 1px solid rgba(251,191,36,.4);
+    border-radius: 6px;
+    padding: 1px 5px;
+    margin-left: 6px;
+    vertical-align: middle;
+}
+.airline-cmp-price {
+    color: var(--radar-teal);
+    font-size: 1.5rem;
+    font-weight: 850;
+    line-height: 1.15;
+}
+.airline-cmp-miles { color: var(--radar-amber); font-size: .86rem; }
+.airline-cmp-btn {
+    display: block;
+    text-align: center;
+    margin-top: 8px;
+    padding: 7px 0;
+    border-radius: 9px;
+    background: rgba(45,212,191,.16);
+    color: var(--radar-teal) !important;
+    border: 1px solid rgba(45,212,191,.34);
+    font-weight: 750;
+    font-size: .84rem;
+    text-decoration: none;
+}
+.airline-cmp-btn:hover { background: rgba(45,212,191,.28); }
+
 /* ── Deal cards grid ─────────────────────────────────────────── */
 .deal-cards-grid {
     display: grid;
@@ -631,6 +711,7 @@ a.buy-link {
     .route-arrow { width: fit-content; }
     .deal-card-header { height: 150px; }
     .deal-cards-grid { grid-template-columns: 1fr !important; }
+    .airline-cmp-grid { grid-template-columns: 1fr 1fr !important; }
 }
 </style>
 """
