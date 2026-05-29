@@ -16,13 +16,21 @@ _LAST_PROVIDER_DIAGNOSTIC: dict[str, Any] = {
 
 
 def search_all_providers(search_params: dict[str, Any]) -> list[dict[str, Any]]:
+    """
+    Search all providers for a route, including multi-segment connections
+    through the Brazilian air network (unless this is already a segment call).
+    """
     global _LAST_PROVIDER_DIAGNOSTIC
+
+    # Prevent recursive multi-segment calls
+    is_segment = bool(search_params.get("_is_segment"))
+
     provider = TravelPayoutsProvider()
     results: list[dict[str, Any]] = []
 
     if provider.is_configured():
         try:
-            travelpayouts_results = provider.search_flights(
+            tp_results = provider.search_flights(
                 origin=search_params["origin"],
                 destination=search_params["destination"],
                 departure_date=search_params["departure_date"],
@@ -30,12 +38,12 @@ def search_all_providers(search_params: dict[str, Any]) -> list[dict[str, Any]]:
                 currency=search_params.get("currency", "BRL"),
                 limit=search_params.get("limit", 20),
             )
-            results.extend(travelpayouts_results)
-            if travelpayouts_results:
+            results.extend(tp_results)
+            if tp_results:
                 _LAST_PROVIDER_DIAGNOSTIC = {
                     "provider": provider.name,
                     "status": "real_ok",
-                    "message": f"{len(travelpayouts_results)} cotacao(oes) reais recebidas da Travelpayouts.",
+                    "message": f"{len(tp_results)} cotacao(oes) reais recebidas da Travelpayouts.",
                 }
             else:
                 _LAST_PROVIDER_DIAGNOSTIC = {
@@ -74,7 +82,53 @@ def search_all_providers(search_params: dict[str, Any]) -> list[dict[str, Any]]:
     elif scraper_diagnostics:
         _LAST_PROVIDER_DIAGNOSTIC["scrapers"] = scraper_diagnostics
 
-    return _sort_and_dedupe(results)
+    direct_results = _sort_and_dedupe(results)
+
+    # ── Multi-segment search via Brazilian hubs ────────────────────────────
+    if not is_segment:
+        try:
+            from services.multi_segment_search import search_via_connections
+            combined = search_via_connections(
+                search_params=search_params,
+                direct_search_fn=_search_segment,
+                max_hubs=2,
+                direct_results=direct_results,
+            )
+            if combined:
+                direct_results = _sort_and_dedupe(direct_results + combined)
+                hub_info = ", ".join(
+                    c.get("via_hub", "?") for c in combined
+                )
+                _LAST_PROVIDER_DIAGNOSTIC["multi_segment"] = (
+                    f"{len(combined)} rota(s) combinada(s) encontrada(s) via {hub_info}."
+                )
+        except Exception:
+            # Multi-segment failure must never break the main search
+            pass
+
+    return direct_results
+
+
+def _search_segment(search_params: dict[str, Any]) -> list[dict[str, Any]]:
+    """
+    Search a single one-way segment.  Used by multi_segment_search as the
+    provider function for each leg — never triggers multi-segment recursion.
+    """
+    provider = TravelPayoutsProvider()
+    if provider.is_configured():
+        try:
+            return provider.search_flights(
+                origin=search_params["origin"],
+                destination=search_params["destination"],
+                departure_date=search_params["departure_date"],
+                return_date=None,   # segments are always one-way
+                currency=search_params.get("currency", "BRL"),
+                limit=search_params.get("limit", 5),
+            )
+        except TravelPayoutsProviderError:
+            pass
+    # Demo fallback for segment
+    return _demo_results(search_params)
 
 
 def search_year_price_calendar(search_params: dict[str, Any]) -> list[dict[str, Any]]:
@@ -115,7 +169,7 @@ def _sort_and_dedupe(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
         )
         if key not in unique:
             unique[key] = item
-    return sorted(unique.values(), key=lambda quote: float(quote.get("price") or 0))
+    return sorted(unique.values(), key=lambda q: float(q.get("price") or 0))
 
 
 def _demo_results(
@@ -123,20 +177,36 @@ def _demo_results(
     provider_name: str = "travelpayouts_demo",
     fallback_reason: str | None = None,
 ) -> list[dict[str, Any]]:
-    origin = str(search_params.get("origin") or "BEL").upper()
+    """Generate realistic demo results.  Domestic routes get lower price ranges."""
+    from services.air_network import get_region
+
+    origin = str(search_params.get("origin") or "GRU").upper()
     destination = str(search_params.get("destination") or "LIS").upper()
     departure_date = _date_to_day(search_params.get("departure_date") or date.today() + timedelta(days=90))
     return_date = search_params.get("return_date")
     return_date_text = _date_to_day(return_date) if return_date else None
     currency = str(search_params.get("currency") or "BRL").upper()
     adults = int(search_params.get("adults") or search_params.get("passengers") or 1)
+
     seed = f"{origin}:{destination}:{departure_date}:{return_date_text}:{adults}"
     rng = Random(seed)
-    airlines = ["TP", "LA", "AD", "G3", "IB"]
+
+    # ── Price range: domestic vs international ─────────────────────────────
+    origin_region = get_region(origin)
+    dest_region = get_region(destination)
+    both_domestic = origin_region is not None and dest_region is not None
+
+    if both_domestic:
+        # Realistic Brazilian domestic fares (per person one-way)
+        base_price = 450 + rng.randint(-200, 350)
+    else:
+        base_price = 2_800 + rng.randint(-450, 650)
+
+    airlines = ["LA", "G3", "AD", "TP", "IB"] if not both_domestic else ["LA", "G3", "AD", "LA", "G3"]
     results = []
     for index in range(6):
-        price = (2800 + rng.randint(-450, 650) + index * 115) * adults
-        stops = rng.choice([0, 1, 1, 2])
+        price = (base_price + index * (60 if both_domestic else 115)) * adults
+        stops = rng.choice([0, 0, 1, 1, 1, 2])
         results.append(
             {
                 "provider": provider_name,
@@ -146,9 +216,9 @@ def _demo_results(
                 "departure_date": departure_date,
                 "return_date": return_date_text,
                 "airline": airlines[(rng.randint(0, 10) + index) % len(airlines)],
-                "price": float(max(price, 499)),
+                "price": float(max(price, 199 if both_domestic else 499)),
                 "currency": currency,
-                "duration_minutes": rng.randint(430, 860),
+                "duration_minutes": rng.randint(60, 240) if both_domestic else rng.randint(430, 860),
                 "stops": stops,
                 "booking_link": "",
                 "raw_payload": {"demo": True, "fallback_reason": fallback_reason},

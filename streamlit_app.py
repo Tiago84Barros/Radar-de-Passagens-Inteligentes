@@ -14,19 +14,29 @@ from app.formatting import format_brl
 from app.location_resolver import LocationResolution, resolve_location
 try:
     from app.location_resolver import search_locations as resolver_search_locations
-except ImportError:  # pragma: no cover - keeps older deployments alive during cache refresh.
+except ImportError:
     def resolver_search_locations(value: str) -> list[LocationResolution]:
         location = resolve_location(value)
         return [location] if location else []
 from app.monitor import run_due_searches, run_search_once
 from app.settings import get_settings
 from app.styles import load_custom_css
+from components.cards import render_deal_cards_section
+from data.destinations_catalog import BRAZIL_IATAS
 from providers.travelpayouts_provider import TravelPayoutsProvider, TravelPayoutsProviderError
+from services.air_network import find_candidate_hubs, hub_route_label
+from services.miles_service import DEFAULT_CENTS_PER_MILE, estimate_miles, format_miles
+from services.opportunity_service import (
+    get_best_miles_deal,
+    get_home_deals,
+    get_international_lowest,
+    get_national_lowest,
+)
 
 
 st.set_page_config(
     page_title="Radar de Passagens Inteligentes",
-    page_icon=":airplane:",
+    page_icon="✈️",
     layout="wide",
 )
 
@@ -53,6 +63,8 @@ OPPORTUNITY_LABELS = {
 NON_REAL_SOURCE_MARKERS = ("mock", "demo", "fallback", "demonstracao", "demonstra")
 
 
+# ─── Auth ─────────────────────────────────────────────────────────────────────
+
 def require_password() -> None:
     settings = get_settings()
     if not settings.app_password:
@@ -73,6 +85,8 @@ def require_password() -> None:
         st.error("Senha inválida.")
     st.stop()
 
+
+# ─── DB seed ──────────────────────────────────────────────────────────────────
 
 def seed_if_empty(enable_demo_seed: bool) -> None:
     if not enable_demo_seed:
@@ -100,6 +114,8 @@ def seed_if_empty(enable_demo_seed: bool) -> None:
         db.flush()
         run_search_once(db, demo)
 
+
+# ─── Helpers ──────────────────────────────────────────────────────────────────
 
 def money(value: Any, currency: str = "R$") -> str:
     return format_brl(None if value is None or pd.isna(value) else float(value))
@@ -184,73 +200,23 @@ def route_context_from_latest(summary: dict) -> dict[str, Any] | None:
     }
 
 
-def render_year_price_calendar(summary: dict, df: pd.DataFrame) -> None:
-    st.subheader("Melhores preços nos próximos 12 meses")
-    if df.empty:
-        st.info("Defina origem e destino na sidebar e clique em Buscar agora para montar o calendário anual.")
-        return
+def duration_label(minutes: int | None) -> str:
+    if not minutes:
+        return "-"
+    hours, mins = divmod(int(minutes), 60)
+    return f"{hours}h {mins:02d}min"
 
-    context = route_context_from_latest(summary)
-    if not context:
-        st.info("Defina uma rota na sidebar para ver o calendário anual de preços.")
-        return
 
-    origin = str(context.get("origin_code") or "").upper()
-    destination = str(context.get("destination_code") or "").upper()
-    route_df = df[(df["origem"] == origin) & (df["destino"] == destination)].copy()
-    if route_df.empty:
-        st.info("Ainda não há cotações salvas para esta rota. Clique em Buscar agora para coletar o calendário anual.")
-        return
+def frequency_label(minutes: int | None) -> str:
+    labels = {30: "30 min", 60: "1h", 180: "3h", 360: "6h", 720: "12h"}
+    return labels.get(int(minutes or 0), f"{minutes} min")
 
-    route_df["ida_dt"] = pd.to_datetime(route_df["ida"], errors="coerce")
-    today = pd.Timestamp(date.today())
-    one_year = today + pd.Timedelta(days=365)
-    route_df = route_df[(route_df["ida_dt"] >= today) & (route_df["ida_dt"] <= one_year)]
-    route_df = route_df.dropna(subset=["ida_dt", "preço"])
-    if route_df.empty:
-        st.info("Não há cotações futuras no intervalo de 12 meses para esta rota.")
-        return
 
-    route_df["companhia"] = route_df["companhia"].fillna("Companhia não informada").replace("", "Companhia não informada")
-    best_by_airline = (
-        route_df.groupby(["ida_dt", "companhia"], as_index=False)
-        .agg(preço=("preço", "min"), provedor=("provedor", "first"), link=("link", "first"))
-        .sort_values(["ida_dt", "preço"])
-    )
-    best_overall = best_by_airline.loc[best_by_airline.groupby("ida_dt")["preço"].idxmin()].copy()
+def status_badge(label: str, status: str = "neutral") -> str:
+    return f'<span class="status-pill status-{status}">{label}</span>'
 
-    metrics = [
-        ("Menor preço anual", money(best_overall["preço"].min()), f"{origin} -> {destination}"),
-        ("Preço médio anual", money(best_overall["preço"].mean()), "Menores tarifas por data"),
-        ("Companhias", best_by_airline["companhia"].nunique(), "Com cotações registradas"),
-        ("Datas mapeadas", best_overall["ida_dt"].nunique(), "Dentro dos próximos 12 meses"),
-    ]
-    render_metric_cards(metrics)
 
-    fig = px.line(
-        best_by_airline,
-        x="ida_dt",
-        y="preço",
-        color="companhia",
-        markers=True,
-        labels={"ida_dt": "Data de ida", "preço": "Preço", "companhia": "Companhia"},
-    )
-    fig.add_scatter(
-        x=best_overall["ida_dt"],
-        y=best_overall["preço"],
-        mode="markers",
-        name="Melhor do dia",
-        marker=dict(size=10, color="#2DD4BF", symbol="diamond"),
-    )
-    fig.update_layout(height=430, margin=dict(l=8, r=8, t=20, b=8), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-    st.plotly_chart(fig, use_container_width=True)
-
-    table = best_overall.sort_values("preço").head(12)[["ida_dt", "companhia", "preço", "provedor", "link"]].copy()
-    table["data de ida"] = table["ida_dt"].map(format_date)
-    table["preço"] = table["preço"].map(format_brl)
-    table = table[["data de ida", "companhia", "preço", "provedor", "link"]]
-    st.dataframe(table, use_container_width=True, hide_index=True)
-
+# ─── Data loading ─────────────────────────────────────────────────────────────
 
 def load_summary() -> dict:
     with session_scope() as db:
@@ -292,13 +258,31 @@ def quotes_df(quotes: list[FlightQuote], searches: list[FlightSearch], alerts_by
         max_price = search.max_price if search else None
         economy = (max_price - quote.price) if max_price is not None else None
         deal = calculate_deal_score({"price": quote.price}, max_price, [])
+        # Extract via_hub info from raw_payload if stored
+        via_hub = ""
+        try:
+            import json as _json
+            rp = quote.raw_payload
+            if isinstance(rp, str):
+                rp = _json.loads(rp)
+            if isinstance(rp, dict):
+                via_hub = str(rp.get("via_hub") or "")
+        except Exception:
+            pass
+
+        route_label = (
+            hub_route_label(quote.origin, via_hub, quote.destination)
+            if via_hub else
+            f"{quote.origin} → {quote.destination}"
+        )
         rows.append(
             {
                 "id": quote.id,
                 "search_id": quote.search_id,
-                "rota": f"{quote.origin} → {quote.destination}",
+                "rota": route_label,
                 "origem": quote.origin,
                 "destino": quote.destination,
+                "via_hub": via_hub,
                 "ida": quote.departure_date,
                 "volta": quote.return_date,
                 "companhia": quote.airline,
@@ -345,30 +329,6 @@ def searches_df(searches: list[FlightSearch], df_quotes: pd.DataFrame) -> pd.Dat
     )
 
 
-def duration_label(minutes: int | None) -> str:
-    if not minutes:
-        return "-"
-    hours, mins = divmod(int(minutes), 60)
-    return f"{hours}h {mins:02d}min"
-
-
-def frequency_label(minutes: int | None) -> str:
-    labels = {30: "30 min", 60: "1h", 180: "3h", 360: "6h", 720: "12h"}
-    return labels.get(int(minutes or 0), f"{minutes} min")
-
-
-def opportunity_score(opportunity: str, economy: float | None, max_price: float | None) -> int:
-    base = {
-        "normal": 45,
-        "boa_oportunidade": 68,
-        "excelente_oportunidade": 84,
-        "oportunidade_rara": 95,
-    }.get(opportunity, 50)
-    if economy is not None and max_price:
-        base += min(max((economy / max_price) * 20, 0), 10)
-    return int(min(round(base), 100))
-
-
 def build_metrics(summary: dict, df: pd.DataFrame) -> dict[str, Any]:
     recent = pd.DataFrame()
     if not df.empty:
@@ -394,9 +354,28 @@ def build_metrics(summary: dict, df: pd.DataFrame) -> dict[str, Any]:
     }
 
 
-def status_badge(label: str, status: str = "neutral") -> str:
-    return f'<span class="status-pill status-{status}">{label}</span>'
+# ─── Shared render helpers ────────────────────────────────────────────────────
 
+def render_metric_cards(values: list[tuple], per_row: int = 4) -> None:
+    for start in range(0, len(values), per_row):
+        cols = st.columns(min(per_row, len(values) - start))
+        for col, metric in zip(cols, values[start:start + per_row]):
+            label, value, help_text = metric[:3]
+            indicator = metric[3] if len(metric) > 3 else "Atualizado"
+            col.markdown(
+                f"""
+                <div class="metric-card">
+                    <div class="metric-label">{label}</div>
+                    <div class="metric-value">{value}</div>
+                    <div class="metric-help">{help_text}</div>
+                    <div class="metric-indicator">{indicator}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+
+# ─── Location picker ──────────────────────────────────────────────────────────
 
 def _resolve_search_location(value: str, field_label: str) -> LocationResolution | None:
     location = resolve_location(value)
@@ -437,38 +416,42 @@ def _render_location_picker(label: str, key: str) -> tuple[str, LocationResoluti
     return query, selected
 
 
+# ─── Header ───────────────────────────────────────────────────────────────────
+
 def render_header(provider_status: dict[str, Any], latest_provider_log: ProviderLog | None = None) -> None:
     load_custom_css()
     if provider_status["demo_mode"]:
         st.markdown(
-            '<div class="demo-banner">Modo demonstração: configure a Travelpayouts para buscar passagens reais.</div>',
+            '<div class="demo-banner">⚠️ Modo demonstração: configure o token Travelpayouts na sidebar para buscar passagens reais.</div>',
             unsafe_allow_html=True,
         )
     elif latest_provider_log and latest_provider_log.status == "real_failed_fallback":
         st.markdown(
-            f'<div class="demo-banner">Travelpayouts configurada, mas a ultima consulta falhou e usou fallback demo. '
+            f'<div class="demo-banner">⚠️ Travelpayouts configurada, mas a ultima consulta falhou e usou fallback demo. '
             f'Motivo: {latest_provider_log.error_message or "erro nao informado"}</div>',
             unsafe_allow_html=True,
         )
     elif latest_provider_log and latest_provider_log.status == "real_empty":
         st.markdown(
-            '<div class="demo-banner">Travelpayouts respondeu, mas nao encontrou cotacoes para a ultima rota/data pesquisada.</div>',
+            '<div class="demo-banner">ℹ️ Travelpayouts respondeu, mas nao encontrou cotacoes para a ultima rota/data pesquisada.</div>',
             unsafe_allow_html=True,
         )
     st.markdown(
         f"""
         <div class="top-shell">
             <div>
-                <div class="top-kicker">Monitoramento de tarifas aéreas</div>
+                <div class="top-kicker">✈️ Monitoramento inteligente de tarifas aéreas</div>
                 <p class="radar-title">Radar de Passagens Inteligentes</p>
                 <div class="radar-subtitle">
-                    Monitore rotas, detecte quedas de preço e receba alertas automáticos.
+                    Encontre oportunidades em dinheiro e milhas para viajar melhor pagando menos.
                 </div>
             </div>
             <div class="hero-status">
                 <div class="hero-status-title">Status operacional</div>
-                {status_badge("Modo demo", "warn") if provider_status["demo_mode"] else status_badge("API real", "ok")}
-                <div class="opportunity-detail">Provider: {provider_status["provider_label"]}</div>
+                {status_badge("Modo demo", "warn") if provider_status["demo_mode"] else status_badge("API real ativa", "ok")}
+                <div class="opportunity-detail" style="margin-top:8px;color:#9AA8BC;font-size:.82rem;">
+                    Provider: {provider_status["provider_label"]}
+                </div>
             </div>
         </div>
         """,
@@ -476,66 +459,43 @@ def render_header(provider_status: dict[str, Any], latest_provider_log: Provider
     )
 
 
-def render_metric_cards(values: list[tuple], per_row: int = 4) -> None:
-    for start in range(0, len(values), per_row):
-        cols = st.columns(min(per_row, len(values) - start))
-        for col, metric in zip(cols, values[start:start + per_row]):
-            label, value, help_text = metric[:3]
-            indicator = metric[3] if len(metric) > 3 else "Atualizado"
-            col.markdown(
-                f"""
-                <div class="metric-card">
-                    <div class="metric-label">{label}</div>
-                    <div class="metric-value">{value}</div>
-                    <div class="metric-help">{help_text}</div>
-                    <div class="metric-indicator">{indicator}</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-
-
-def render_top_metrics(summary: dict, df: pd.DataFrame) -> None:
-    metrics = build_metrics(summary, df)
-    render_metric_cards(
-        [
-            ("Buscas ativas", metrics["active"], "Rotinas em monitoramento", "Online"),
-            ("Menor preço 24h", money(metrics["lowest_24h"]), "Cotação mínima recente", "24h"),
-            ("Oportunidades", metrics["opportunities"], "Boas, ótimas e excelentes", "Score ativo"),
-            ("Alertas enviados", metrics["alerts"], "Telegram/e-mail", "Historico real"),
-            ("Economia potencial", money(metrics["economy"]), "Soma vs. preço máximo", "Estimado"),
-            ("Última execução", format_datetime(metrics["latest_search"]), "Robô de busca", "Monitor"),
-        ],
-        per_row=3,
-    )
-
+# ─── Sidebar ──────────────────────────────────────────────────────────────────
 
 def render_sidebar(summary: dict, provider_status: dict[str, Any], db_connected: bool) -> None:
     settings = get_settings()
     with st.sidebar:
-        st.title("Radar de Passagens")
+        st.title("✈️ Radar de Passagens")
         st.caption("Painel de controle")
-        st.subheader("Nova busca de passagem")
+
+        st.subheader("🔍 Nova busca de passagem")
         if st.session_state.get("last_location_resolution"):
             st.info(st.session_state["last_location_resolution"])
         origin_input, selected_origin = _render_location_picker("Origem", "origin")
         destination_input, selected_destination = _render_location_picker("Destino", "destination")
+
         with st.form("new_search_form", clear_on_submit=False):
             departure = st.date_input("Data de ida", value=None)
             trip_label = st.selectbox("Tipo de viagem", list(TRIP_TYPE_OPTIONS.keys()), index=1)
             return_date = st.date_input(
-                "Data de volta opcional",
+                "Data de volta",
                 value=None,
                 disabled=TRIP_TYPE_OPTIONS[trip_label] == "one_way",
             )
             adults = st.number_input("Adultos", min_value=1, max_value=9, value=1)
-            max_price = st.number_input("Preço máximo desejado", min_value=100.0, value=3200.0, step=50.0)
+            max_price = st.number_input("Preço máximo (R$)", min_value=100.0, value=3200.0, step=50.0)
             currency = st.selectbox("Moeda", ["BRL", "USD", "EUR"], index=0)
             flexibility = st.selectbox("Flexibilidade de datas", list(FLEXIBILITY_OPTIONS.keys()))
-            frequency_label_selected = st.selectbox("Frequência de busca automática", list(FREQUENCY_OPTIONS.keys()), index=1)
-            telegram_enabled = st.toggle("Ativar alerta Telegram", value=bool(settings.telegram_bot_token and settings.telegram_chat_id))
-            search_now = st.form_submit_button("Buscar agora", use_container_width=True)
-            start_monitoring = st.form_submit_button("Iniciar monitoramento", type="primary", use_container_width=True)
+            frequency_label_selected = st.selectbox("Frequência de busca", list(FREQUENCY_OPTIONS.keys()), index=1)
+
+            st.markdown("**Opções de alerta**")
+            search_miles = st.toggle("Buscar em milhas", value=False, help="Habilita busca comparativa em milhas (estimada)")
+            telegram_enabled = st.toggle(
+                "Alertas via Telegram",
+                value=bool(settings.telegram_bot_token and settings.telegram_chat_id),
+            )
+
+            search_now = st.form_submit_button("🔍 Buscar agora", use_container_width=True)
+            start_monitoring = st.form_submit_button("🛰️ Iniciar monitoramento", type="primary", use_container_width=True)
 
         if search_now or start_monitoring:
             origin_location = selected_origin or _resolve_search_location(origin_input, "a origem")
@@ -548,7 +508,7 @@ def render_sidebar(summary: dict, provider_status: dict[str, Any], db_connected:
                 st.warning("Telegram marcado, mas os secrets do Telegram ainda não estão configurados.")
             else:
                 st.session_state["last_location_resolution"] = (
-                    f"Busca resolvida como {origin_location.label} -> {destination_location.label}."
+                    f"✅ Busca: {origin_location.label} → {destination_location.label}"
                 )
                 st.session_state["last_route_context"] = {
                     "origin_code": origin_location.code,
@@ -580,27 +540,26 @@ def render_sidebar(summary: dict, provider_status: dict[str, Any], db_connected:
                     db.flush()
                     saved = run_search_once(db, search, include_year_calendar=True)
                 if start_monitoring:
-                    st.success(f"Monitoramento iniciado. {saved} cotação(ões) salvas.")
+                    st.success(f"🛰️ Monitoramento iniciado. {saved} cotação(ões) salvas.")
                 else:
-                    st.success(f"Busca concluída. {saved} cotação(ões) salvas.")
+                    st.success(f"✅ Busca concluída. {saved} cotação(ões) salvas.")
                 st.rerun()
 
         st.divider()
-        st.subheader("Status do sistema")
+        st.subheader("📡 Status do sistema")
         telegram_ok = bool(settings.telegram_bot_token and settings.telegram_chat_id)
         status_rows = [
-            ("Banco conectado", "Sim" if db_connected else "Não"),
+            ("Banco conectado", "✅ Sim" if db_connected else "❌ Não"),
             ("Provider ativo", provider_status["provider_label"]),
-            ("Travelpayouts", "Ativo" if settings.travelpayouts_api_token else "Inativo"),
-            ("Scraping Azul/GOL/LATAM", "Ativo" if settings.enable_airline_scrapers else "Inativo"),
-            ("Modo", "Demonstração" if provider_status["demo_mode"] else "Travelpayouts real"),
-            ("Telegram configurado", "Sim" if telegram_ok else "Não"),
-            ("Última busca executada", format_datetime(summary.get("latest_search"))),
+            ("Travelpayouts", "✅ Ativo" if settings.travelpayouts_api_token else "⚠️ Inativo"),
+            ("Modo", "⚠️ Demonstração" if provider_status["demo_mode"] else "✅ Travelpayouts real"),
+            ("Telegram", "✅ Configurado" if telegram_ok else "⚠️ Não configurado"),
+            ("Última busca", format_datetime(summary.get("latest_search"))),
             ("Buscas ativas", summary["active"]),
         ]
         latest_provider_log = summary.get("latest_provider_log")
         if latest_provider_log:
-            status_rows.insert(3, ("Ultimo status API", latest_provider_log.status))
+            status_rows.insert(3, ("Status API", latest_provider_log.status))
         for label, value in status_rows:
             st.markdown(
                 f'<div class="status-row"><span class="status-label">{label}</span>'
@@ -609,41 +568,104 @@ def render_sidebar(summary: dict, provider_status: dict[str, Any], db_connected:
             )
 
         st.divider()
-        if st.button("Rodar buscas devidas agora", use_container_width=True):
+
+        # ── Malha aérea: show candidate hubs for last search ──────────────
+        last_ctx = st.session_state.get("last_route_context")
+        if last_ctx:
+            orig = last_ctx.get("origin_code", "")
+            dest = last_ctx.get("destination_code", "")
+            if orig and dest:
+                hubs = find_candidate_hubs(orig, dest, max_hubs=3)
+                hub_str = " · ".join(hubs) if hubs else "direto"
+                st.markdown(
+                    f'<div class="malha-info">'
+                    f'<div class="malha-title">🔗 Malha aérea expandida</div>'
+                    f'<div class="malha-desc">Busca automática de conexões via hubs:</div>'
+                    f'<div class="malha-hubs">{hub_str}</div>'
+                    f'<div class="malha-route">{orig} → {hub_str.split(" · ")[0] if hubs else "–"} → {dest}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+        if st.button("▶️ Rodar buscas devidas agora", use_container_width=True):
             result = run_due_searches(force=False)
             st.success(f"{result['searches_checked']} buscas checadas; {result['quotes_saved']} cotações salvas.")
             st.rerun()
 
 
-def render_overview(summary: dict, df: pd.DataFrame) -> None:
-    st.subheader("Resumo do radar")
+# ─── Tab: Início ──────────────────────────────────────────────────────────────
+
+def render_home_metrics(summary: dict, df: pd.DataFrame) -> None:
+    """6 KPI cards for the home screen."""
+    metrics_base = build_metrics(summary, df)
+
+    nat_lowest = get_national_lowest(df)
+    intl_lowest = get_international_lowest(df)
+    best_miles = get_best_miles_deal(df)
+
+    best_miles_label = "–"
+    if best_miles:
+        miles = best_miles.get("estimated_miles") or 0
+        best_miles_label = format_miles(miles) if miles else "–"
+
+    render_metric_cards(
+        [
+            ("Buscas ativas", metrics_base["active"], "Rotinas em monitoramento", "Online"),
+            ("Oportunidades", metrics_base["opportunities"], "Boas, ótimas e excelentes", "Score ativo"),
+            ("Menor preço nacional", money(nat_lowest) if nat_lowest else "–", "Menor tarifa Brasil", "Nacional"),
+            ("Menor preço internacional", money(intl_lowest) if intl_lowest else "–", "Menor tarifa exterior", "Internacional"),
+            ("Melhor em milhas", best_miles_label, "Estimativa base R$0,035/milha", "Milhas"),
+            ("Alertas enviados", metrics_base["alerts"], "Telegram / e-mail", "Histórico"),
+        ],
+        per_row=3,
+    )
+
+
+def render_home_tab(summary: dict, df_quotes: pd.DataFrame, provider_status: dict) -> None:
+    """Main home screen: metrics + national deals + international deals."""
+    render_home_metrics(summary, df_quotes)
+
+    # ── Malha aérea expandida info bar ────────────────────────────────────
     st.markdown(
-        f"""
-        <div class="soft-card">
-            <div class="section-note">
-                O radar acompanha {summary["routes"]} rota(s), mantém {summary["active"]} busca(s) ativa(s)
-                e registrou {len(df)} cotação(ões) recentes para análise.
-            </div>
-        </div>
-        """,
+        '<div class="malha-banner">'
+        '<span class="malha-banner-icon">🔗</span>'
+        '<span>'
+        '<strong>Busca via malha aérea expandida</strong> — o radar pesquisa automaticamente '
+        'rotas diretas <em>e</em> combinadas através dos hubs brasileiros (GRU, BSB, GIG e outros), '
+        'encontrando a combinação de trechos mais barata para o seu destino.'
+        '</span>'
+        '</div>',
         unsafe_allow_html=True,
     )
     st.write("")
-    st.subheader("Últimas cotações")
-    if df.empty:
-        st.info("As últimas cotações aparecerão aqui assim que o primeiro monitoramento rodar.")
-        return
-    latest_source = df.copy()
-    latest_source["detectado_em_dt"] = safe_datetime_series(latest_source["detectado_em"])
-    latest = latest_source.sort_values("detectado_em_dt", ascending=False).head(8)[
-        ["rota", "ida", "volta", "companhia", "preço", "moeda", "classificação", "provedor", "detectado_em"]
-    ].copy()
-    latest["ida"] = latest["ida"].map(format_date)
-    latest["volta"] = latest["volta"].map(format_date)
-    latest["preço"] = latest["preço"].map(format_brl)
-    latest["detectado_em"] = latest["detectado_em"].map(format_datetime)
-    st.dataframe(latest, use_container_width=True, hide_index=True)
 
+    with st.spinner("Carregando oportunidades..."):
+        national_deals, intl_deals = get_home_deals(df_quotes, cents_per_mile=DEFAULT_CENTS_PER_MILE)
+
+    is_demo_mode = provider_status.get("demo_mode", True)
+    demo_note = ""
+    if is_demo_mode:
+        demo_note = (
+            "Configure o token Travelpayouts para ver passagens reais. "
+            "Abaixo estão exemplos ilustrativos de oportunidades."
+        )
+
+    render_deal_cards_section(
+        title="✈️ Passagens baratas pelo Brasil",
+        subtitle=demo_note or "Melhores oportunidades nacionais — diretas e via conexões.",
+        deals=national_deals,
+        per_row=3,
+    )
+
+    render_deal_cards_section(
+        title="🌎 Passagens baratas para o exterior",
+        subtitle=demo_note or "Melhores oportunidades internacionais — diretas e via conexões.",
+        deals=intl_deals,
+        per_row=3,
+    )
+
+
+# ─── Tab: Oportunidades ───────────────────────────────────────────────────────
 
 def render_opportunities(df: pd.DataFrame) -> None:
     st.subheader("Oportunidades encontradas")
@@ -656,6 +678,7 @@ def render_opportunities(df: pd.DataFrame) -> None:
         return
     opportunity_df["detectado_em_dt"] = safe_datetime_series(opportunity_df["detectado_em"])
     ordered = opportunity_df.sort_values(["score", "economia", "detectado_em_dt"], ascending=[False, False, False]).head(12)
+
     for start in range(0, len(ordered), 3):
         cols = st.columns(3)
         for col, (_, row) in zip(cols, ordered.iloc[start:start + 3].iterrows()):
@@ -671,26 +694,51 @@ def render_opportunities(df: pd.DataFrame) -> None:
                 "Ótima oportunidade": "tag-great",
                 "Excelente oportunidade": "tag-excellent",
             }.get(row["oportunidade"], "tag-muted")
+
+            miles = estimate_miles(float(row["preço"] or 0))
+            miles_html = f'<div class="opportunity-miles">🏆 {format_miles(miles)}</div>'
+
+            # Connection hub info
+            via_hub = str(row.get("via_hub") or "")
+            via_html = (
+                f'<div class="opportunity-detail via-hub-tag">🔗 Conexão via {via_hub} '
+                f'(combinação de trechos)</div>'
+                if via_hub else ""
+            )
+            is_combined = bool(via_hub)
+            combined_note = (
+                '<div class="opportunity-detail" style="color:#FDE68A;font-size:.78rem;">'
+                '⚠️ Preço soma dois trechos independentes — reserve cada trecho separadamente.'
+                '</div>'
+                if is_combined else ""
+            )
+
             col.markdown(
                 f"""
                 <div class="{card_class}">
                     <span class="tag {tag_class}">{row['classificação']}</span>
                     <span class="tag {alert_class}">{alert_label}</span>
+                    {'<span class="tag tag-connection">Via ' + via_hub + '</span>' if via_hub else ''}
                     <div class="opportunity-route">{row['rota']}</div>
+                    {via_html}
                     <div class="opportunity-detail">Ida: {format_date(row['ida'])} · Volta: {format_date(row['volta'])}</div>
                     <div class="opportunity-price">{format_brl(row['preço'])}</div>
+                    {miles_html}
                     <div class="opportunity-detail">Preço máximo: {money(row['preço máximo'], row['moeda'])}</div>
                     <div class="opportunity-detail">Economia estimada: {money(economy, row['moeda'])}</div>
-                    <div class="opportunity-detail">Score: {row['score']}/100</div>
-                    <div class="opportunity-detail">Companhia: {row['companhia']}</div>
+                    <div class="opportunity-detail">Score: {row['score']}/100 · {row['companhia']}</div>
                     <div class="opportunity-detail">Provider: {row['provedor']}</div>
                     <div class="opportunity-detail">Duração: {row['duração']} · Escalas: {row['escalas']}</div>
-                    <div class="opportunity-detail"><a class="buy-link" href="{row['link']}" target="_blank">Abrir link de compra</a></div>
+                    {combined_note}
+                    <div class="opportunity-detail"><a class="buy-link" href="{row['link']}" target="_blank">Abrir link de compra →</a></div>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
+    st.caption("* Milhas estimadas com base em R$ 0,035/milha. Não representa disponibilidade real em programas de fidelidade.")
 
+
+# ─── Tab: Buscas Ativas ───────────────────────────────────────────────────────
 
 def render_searches(summary: dict, df_quotes: pd.DataFrame) -> None:
     st.subheader("Buscas ativas")
@@ -712,13 +760,88 @@ def render_searches(summary: dict, df_quotes: pd.DataFrame) -> None:
         cols = st.columns(4)
         for col, search in zip(cols, searches[start:start + 4]):
             action = "Pausar" if search.is_active else "Reativar"
-            label = f"{action} #{search.id} · {search.origin}-{search.destination}"
+            label = f"{action} #{search.id} · {search.origin}→{search.destination}"
             if col.button(label, key=f"toggle-search-{search.id}", use_container_width=True):
                 with session_scope() as db:
                     item = db.get(FlightSearch, search.id)
                     if item:
                         item.is_active = not item.is_active
                 st.rerun()
+
+
+# ─── Tab: Histórico ───────────────────────────────────────────────────────────
+
+def render_year_price_calendar(summary: dict, df: pd.DataFrame) -> None:
+    st.subheader("Melhores preços nos próximos 12 meses")
+    if df.empty:
+        st.info("Defina origem e destino na sidebar e clique em Buscar agora para montar o calendário anual.")
+        return
+
+    context = route_context_from_latest(summary)
+    if not context:
+        st.info("Defina uma rota na sidebar para ver o calendário anual de preços.")
+        return
+
+    origin = str(context.get("origin_code") or "").upper()
+    destination = str(context.get("destination_code") or "").upper()
+    route_df = df[(df["origem"] == origin) & (df["destino"] == destination)].copy()
+    if route_df.empty:
+        st.info("Ainda não há cotações salvas para esta rota. Clique em Buscar agora para coletar o calendário anual.")
+        return
+
+    route_df["ida_dt"] = pd.to_datetime(route_df["ida"], errors="coerce")
+    today = pd.Timestamp(date.today())
+    one_year = today + pd.Timedelta(days=365)
+    route_df = route_df[(route_df["ida_dt"] >= today) & (route_df["ida_dt"] <= one_year)]
+    route_df = route_df.dropna(subset=["ida_dt", "preço"])
+    if route_df.empty:
+        st.info("Não há cotações futuras no intervalo de 12 meses para esta rota.")
+        return
+
+    route_df["companhia"] = route_df["companhia"].fillna("Companhia não informada").replace("", "Companhia não informada")
+    best_by_airline = (
+        route_df.groupby(["ida_dt", "companhia"], as_index=False)
+        .agg(preço=("preço", "min"), provedor=("provedor", "first"), link=("link", "first"))
+        .sort_values(["ida_dt", "preço"])
+    )
+    best_overall = best_by_airline.loc[best_by_airline.groupby("ida_dt")["preço"].idxmin()].copy()
+
+    cal_metrics = [
+        ("Menor preço anual", money(best_overall["preço"].min()), f"{origin} → {destination}"),
+        ("Preço médio anual", money(best_overall["preço"].mean()), "Menores tarifas por data"),
+        ("Companhias", best_by_airline["companhia"].nunique(), "Com cotações registradas"),
+        ("Datas mapeadas", best_overall["ida_dt"].nunique(), "Próximos 12 meses"),
+    ]
+    render_metric_cards(cal_metrics)
+
+    fig = px.line(
+        best_by_airline,
+        x="ida_dt",
+        y="preço",
+        color="companhia",
+        markers=True,
+        labels={"ida_dt": "Data de ida", "preço": "Preço", "companhia": "Companhia"},
+    )
+    fig.add_scatter(
+        x=best_overall["ida_dt"],
+        y=best_overall["preço"],
+        mode="markers",
+        name="Melhor do dia",
+        marker=dict(size=10, color="#2DD4BF", symbol="diamond"),
+    )
+    fig.update_layout(
+        height=430,
+        margin=dict(l=8, r=8, t=20, b=8),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    table = best_overall.sort_values("preço").head(12)[["ida_dt", "companhia", "preço", "provedor", "link"]].copy()
+    table["data de ida"] = table["ida_dt"].map(format_date)
+    table["preço"] = table["preço"].map(format_brl)
+    table = table[["data de ida", "companhia", "preço", "provedor", "link"]]
+    st.dataframe(table, use_container_width=True, hide_index=True)
 
 
 def render_history(df: pd.DataFrame) -> None:
@@ -729,17 +852,18 @@ def render_history(df: pd.DataFrame) -> None:
     routes = ["Todas"] + sorted(df["rota"].unique().tolist())
     route = st.selectbox("Filtrar por rota", routes)
     filtered = df if route == "Todas" else df[df["rota"] == route]
-    metrics = [
+    hist_metrics = [
         ("Menor histórico", money(filtered["preço"].min()), "Mínimo registrado"),
         ("Preço médio", money(filtered["preço"].mean()), "Média das cotações"),
         ("Maior preço", money(filtered["preço"].max()), "Máximo registrado"),
         (
             "Variação",
-            f"{(((filtered['preço'].max() - filtered['preço'].min()) / filtered['preço'].min()) * 100):.1f}%" if filtered["preço"].min() else "-",
+            f"{(((filtered['preço'].max() - filtered['preço'].min()) / filtered['preço'].min()) * 100):.1f}%"
+            if filtered["preço"].min() else "-",
             "Entre mínimo e máximo",
         ),
     ]
-    render_metric_cards(metrics)
+    render_metric_cards(hist_metrics)
     st.divider()
     chart_df = filtered.copy()
     chart_df["detectado_em_dt"] = safe_datetime_series(chart_df["detectado_em"])
@@ -758,6 +882,110 @@ def render_history(df: pd.DataFrame) -> None:
     st.dataframe(table, use_container_width=True, hide_index=True)
 
 
+# ─── Tab: Milhas ──────────────────────────────────────────────────────────────
+
+def render_miles_tab(df: pd.DataFrame) -> None:
+    st.subheader("Estimativa de milhas")
+
+    st.markdown(
+        '<div class="miles-disclaimer">'
+        "⚠️ <strong>Aviso importante:</strong> Os valores em milhas exibidos nesta aba são <strong>estimativas</strong> "
+        "calculadas com base em um valor de referência por milha (padrão: R$ 0,035). "
+        "Eles <strong>não representam disponibilidade real</strong> em programas de fidelidade como "
+        "Smiles, TudoAzul, Latam Pass, Livelo ou similares. "
+        "Consulte o programa de fidelidade da companhia para verificar disponibilidade e resgates reais."
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+    cents_per_mile = st.slider(
+        "Valor estimado por milha (R$)",
+        min_value=0.010,
+        max_value=0.100,
+        value=DEFAULT_CENTS_PER_MILE,
+        step=0.005,
+        format="R$ %.3f",
+        help="Ajuste o custo estimado por milha para recalcular as estimativas.",
+    )
+
+    st.caption(f"Fórmula: milhas = preço em R$ ÷ {cents_per_mile:.3f}".replace(".", ","))
+
+    if df.empty:
+        st.info("Sem cotações disponíveis. Inicie um monitoramento na sidebar para ver estimativas de milhas.")
+        _render_miles_demo_table(cents_per_mile)
+        return
+
+    miles_df = df.copy()
+    miles_df["estimativa_milhas"] = miles_df["preço"].apply(
+        lambda p: estimate_miles(float(p or 0), cents_per_mile)
+    )
+    miles_df["milhas_formatadas"] = miles_df["estimativa_milhas"].apply(format_miles)
+    miles_df["preço_fmt"] = miles_df["preço"].apply(format_brl)
+
+    # Top 10 by price (cheapest = fewest miles needed)
+    top = miles_df.sort_values("preço").head(10)
+
+    m_cols = st.columns(3)
+    with m_cols[0]:
+        st.markdown(
+            f'<div class="miles-card"><div class="miles-card-label">Menor estimativa</div>'
+            f'<div class="miles-card-value">{format_miles(int(top["estimativa_milhas"].min() if not top.empty else 0))}</div></div>',
+            unsafe_allow_html=True,
+        )
+    with m_cols[1]:
+        st.markdown(
+            f'<div class="miles-card"><div class="miles-card-label">Média estimada</div>'
+            f'<div class="miles-card-value">{format_miles(int(top["estimativa_milhas"].mean() if not top.empty else 0))}</div></div>',
+            unsafe_allow_html=True,
+        )
+    with m_cols[2]:
+        st.markdown(
+            f'<div class="miles-card"><div class="miles-card-label">Valor ref. por milha</div>'
+            f'<div class="miles-card-value">R$ {cents_per_mile:.3f}</div></div>'.replace(".", ","),
+            unsafe_allow_html=True,
+        )
+
+    st.write("")
+    st.subheader("Comparativo: dinheiro × milhas")
+    display = top[["rota", "ida", "companhia", "preço_fmt", "milhas_formatadas", "classificação", "provedor"]].copy()
+    display.columns = ["Rota", "Data ida", "Companhia", "Preço R$", "Milhas estimadas", "Classificação", "Provider"]
+    display["Data ida"] = display["Data ida"].map(format_date)
+    st.dataframe(display, use_container_width=True, hide_index=True)
+
+    _render_miles_demo_table(cents_per_mile)
+
+
+def _render_miles_demo_table(cents_per_mile: float) -> None:
+    """Show a reference table of example prices vs miles."""
+    st.write("")
+    st.subheader("Tabela de referência: preço × milhas estimadas")
+    st.caption(f"Baseado em R$ {cents_per_mile:.3f}/milha (ajuste o slider acima para recalcular)".replace(".", ","))
+    refs = [
+        ("GRU → LIS", "São Paulo → Lisboa", 1_899.00),
+        ("GRU → MIA", "São Paulo → Miami", 2_199.00),
+        ("GIG → CDG", "Rio → Paris", 2_499.00),
+        ("GRU → JFK", "São Paulo → Nova York", 2_599.00),
+        ("GIG → FOR", "Rio → Fortaleza", 459.90),
+        ("GRU → SSA", "São Paulo → Salvador", 479.00),
+        ("CGH → BSB", "São Paulo → Brasília", 339.00),
+        ("FOR → REC", "Fortaleza → Recife", 289.00),
+        ("GRU → EZE", "São Paulo → Buenos Aires", 1_299.00),
+        ("GIG → SCL", "Rio → Santiago", 1_499.00),
+    ]
+    rows = []
+    for route, desc, price in refs:
+        miles = estimate_miles(price, cents_per_mile)
+        rows.append({
+            "Rota": route,
+            "Descrição": desc,
+            "Preço (R$)": format_brl(price),
+            "Milhas estimadas": format_miles(miles),
+        })
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+
+# ─── Tab: Configurações ───────────────────────────────────────────────────────
+
 def render_settings(provider_status: dict[str, Any], db_connected: bool) -> None:
     settings = get_settings()
     st.subheader("Configurações operacionais")
@@ -768,9 +996,6 @@ def render_settings(provider_status: dict[str, Any], db_connected: bool) -> None
         {"configuração": "DATABASE_URL", "status": "Configurado" if database_configured else "Não configurado"},
         {"configuração": "TRAVELPAYOUTS_API_TOKEN", "status": "Configurado" if settings.travelpayouts_api_token else "Não configurado"},
         {"configuração": "ENABLE_AIRLINE_SCRAPERS", "status": "Ativo" if settings.enable_airline_scrapers else "Inativo"},
-        {"configuração": "Azul Scraper", "status": "Ativo" if settings.enable_airline_scrapers else "Inativo"},
-        {"configuração": "GOL Scraper", "status": "Ativo" if settings.enable_airline_scrapers else "Inativo"},
-        {"configuração": "LATAM Scraper", "status": "Ativo" if settings.enable_airline_scrapers else "Inativo"},
         {"configuração": "TELEGRAM_BOT_TOKEN", "status": "Configurado" if settings.telegram_bot_token else "Não configurado"},
         {"configuração": "TELEGRAM_CHAT_ID", "status": "Configurado" if settings.telegram_chat_id else "Não configurado"},
         {"configuração": "Provider ativo", "status": provider_status["provider_label"]},
@@ -778,8 +1003,9 @@ def render_settings(provider_status: dict[str, Any], db_connected: bool) -> None
         {"configuração": "Banco", "status": "Conectado" if db_connected else "Indisponível"},
     ]
     st.dataframe(pd.DataFrame(provider_rows), use_container_width=True, hide_index=True)
-    st.markdown("**Teste de conexao Travelpayouts**")
-    if st.button("Testar conexao com Travelpayouts", use_container_width=True):
+
+    st.markdown("**Teste de conexão Travelpayouts**")
+    if st.button("Testar conexão com Travelpayouts", use_container_width=True):
         provider = TravelPayoutsProvider(timeout=15)
         if not provider.is_configured():
             st.warning("TRAVELPAYOUTS_API_TOKEN nao configurado. O app continuara em modo demonstracao.")
@@ -794,71 +1020,42 @@ def render_settings(provider_status: dict[str, Any], db_connected: bool) -> None
                     limit=1,
                 )
                 if sample:
-                    st.success("Conexao com Travelpayouts realizada com sucesso. A API retornou cotacoes reais.")
+                    st.success("✅ Conexão com Travelpayouts realizada com sucesso. A API retornou cotações reais.")
                 else:
-                    st.info("Conexao com Travelpayouts realizada, mas a API nao retornou cotacoes para a rota de teste.")
+                    st.info("Conexão realizada, mas a API não retornou cotações para a rota de teste.")
             except TravelPayoutsProviderError as exc:
                 st.error(str(exc))
+
     latest_provider_log = load_summary().get("latest_provider_log")
     if latest_provider_log:
-        st.markdown("**Ultimo diagnostico Travelpayouts**")
+        st.markdown("**Último diagnóstico Travelpayouts**")
         st.dataframe(
-            pd.DataFrame(
-                [
-                    {
-                        "status": latest_provider_log.status,
-                        "mensagem": latest_provider_log.error_message or "-",
-                        "registrado_em": format_datetime(latest_provider_log.created_at),
-                    }
-                ]
-            ),
+            pd.DataFrame([{
+                "status": latest_provider_log.status,
+                "mensagem": latest_provider_log.error_message or "-",
+                "registrado_em": format_datetime(latest_provider_log.created_at),
+            }]),
             use_container_width=True,
             hide_index=True,
         )
+
     st.markdown("**Como configurar secrets**")
     st.markdown(
         "Configure os secrets no Streamlit Cloud e também em `Settings > Secrets and variables > Actions` "
-        "no GitHub para o robô agendado. O app nunca mostra os valores, apenas se eles existem."
-    )
-    st.markdown("**Para ativar a API Travelpayouts:**")
-    st.markdown(
-        """
-1. Crie ou acesse sua conta Travelpayouts.
-2. Copie seu API token.
-3. No Streamlit Cloud, vá em App > Settings > Secrets.
-4. Adicione:
-        """
+        "no GitHub para o robô agendado."
     )
     st.code(
         """TRAVELPAYOUTS_API_TOKEN = "seu_token"
 TELEGRAM_BOT_TOKEN = "seu_bot_token"
-TELEGRAM_CHAT_ID = "seu_chat_id" """,
+TELEGRAM_CHAT_ID = "seu_chat_id"
+DATABASE_URL = "postgresql://user:pass@host/db" """,
         language="toml",
-    )
-    st.markdown(
-        """
-5. Salve e reinicie o app.
-6. O modo atual deve mudar de demonstração para Travelpayouts real.
-        """
-    )
-    st.markdown("**Secrets esperados**")
-    st.code(
-        """DATABASE_URL
-APP_PASSWORD
-TRAVELPAYOUTS_API_TOKEN
-ENABLE_AIRLINE_SCRAPERS
-TELEGRAM_BOT_TOKEN
-TELEGRAM_CHAT_ID
-SMTP_HOST
-SMTP_PORT
-SMTP_USER
-SMTP_PASSWORD
-ALERT_FROM_EMAIL""",
-        language="text",
     )
     st.markdown("**Diagnóstico do banco**")
     st.json(database_diagnostics())
 
+
+# ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main() -> None:
     require_password()
@@ -872,7 +1069,6 @@ def main() -> None:
         load_custom_css()
         st.error("Não foi possível iniciar o banco de dados.")
         st.write("Confira se o secret `DATABASE_URL` está configurado corretamente no Streamlit Cloud.")
-        st.write("Diagnóstico da conexão lida pelo app:")
         st.json(database_diagnostics())
         st.code(str(exc), language="text")
         st.stop()
@@ -880,22 +1076,36 @@ def main() -> None:
     summary = load_summary()
     render_sidebar(summary, provider_status, db_connected)
     render_header(provider_status, summary.get("latest_provider_log"))
+
     df_quotes = quotes_df(summary["quotes"], summary["searches"], summary["latest_alert_by_quote"])
     real_df_quotes = filter_real_quotes_df(df_quotes)
-    render_year_price_calendar(summary, real_df_quotes)
-    st.write("")
 
-    tab_overview, tab_opportunities, tab_searches, tab_history, tab_settings = st.tabs(
-        ["Visão Geral", "Oportunidades", "Buscas Ativas", "Histórico de Preços", "Configurações"]
-    )
-    with tab_overview:
-        render_overview(summary, real_df_quotes)
+    (
+        tab_home,
+        tab_opportunities,
+        tab_searches,
+        tab_history,
+        tab_miles,
+        tab_settings,
+    ) = st.tabs(["🏠 Início", "🎯 Oportunidades", "🛰️ Buscas Ativas", "📈 Histórico", "🏆 Milhas", "⚙️ Configurações"])
+
+    with tab_home:
+        render_home_tab(summary, real_df_quotes, provider_status)
+
     with tab_opportunities:
         render_opportunities(real_df_quotes)
+
     with tab_searches:
         render_searches(summary, real_df_quotes)
+
     with tab_history:
+        render_year_price_calendar(summary, real_df_quotes)
+        st.divider()
         render_history(real_df_quotes)
+
+    with tab_miles:
+        render_miles_tab(real_df_quotes)
+
     with tab_settings:
         render_settings(provider_status, db_connected)
 
