@@ -74,17 +74,38 @@ def require_password() -> None:
     if st.session_state.get("authenticated"):
         return
     load_custom_css()
-    st.markdown(
-        '<div class="top-shell"><div><p class="radar-title">Radar de Passagens Inteligentes</p>'
-        '<div class="radar-subtitle">Acesso protegido para o dashboard.</div></div></div>',
-        unsafe_allow_html=True,
-    )
-    password = st.text_input("Senha do app", type="password")
-    if st.button("Entrar", type="primary"):
-        if password == settings.app_password:
-            st.session_state["authenticated"] = True
-            st.rerun()
-        st.error("Senha inválida.")
+
+    # Centered, professional login card
+    st.markdown('<div class="login-page">', unsafe_allow_html=True)
+    _, mid, _ = st.columns([1, 1.15, 1])
+    with mid:
+        st.markdown(
+            '<div class="login-card">'
+            '<div class="login-logo">✈️</div>'
+            '<h1 class="login-title">Radar de Passagens Inteligentes</h1>'
+            '<p class="login-subtitle">Monitoramento de tarifas e oportunidades de voos.</p>'
+            '<div class="login-divider"></div>'
+            '<p class="login-prompt">🔒 Área restrita — informe sua senha para continuar.</p>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        with st.form("login_form", clear_on_submit=False):
+            password = st.text_input(
+                "Senha de acesso",
+                type="password",
+                placeholder="Digite sua senha",
+            )
+            submitted = st.form_submit_button("Entrar", type="primary", use_container_width=True)
+        if submitted:
+            if password == settings.app_password:
+                st.session_state["authenticated"] = True
+                st.rerun()
+            st.error("Senha inválida. Verifique e tente novamente.")
+        st.markdown(
+            '<p class="login-footer">Acesso protegido · uso pessoal</p>',
+            unsafe_allow_html=True,
+        )
+    st.markdown('</div>', unsafe_allow_html=True)
     st.stop()
 
 

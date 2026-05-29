@@ -22,6 +22,82 @@ CSS = """
 
 /* ── Base ─────────────────────────────────────────────────────── */
 .stApp { background: var(--radar-bg); color: var(--radar-ink); }
+
+/* ── Login screen ─────────────────────────────────────────────── */
+.login-page {
+    position: fixed;
+    inset: 0;
+    background:
+        radial-gradient(1200px 600px at 50% -10%, rgba(45,212,191,.12), transparent 60%),
+        radial-gradient(900px 500px at 100% 110%, rgba(147,197,253,.10), transparent 60%),
+        var(--radar-bg);
+    z-index: -1;
+}
+/* Lift the centered column toward the vertical middle */
+.main .block-container:has(.login-card) { padding-top: 6vh; }
+.login-card {
+    background: linear-gradient(180deg, rgba(19,35,58,.92) 0%, rgba(15,27,45,.92) 100%);
+    border: 1px solid rgba(45,212,191,.22);
+    border-radius: 20px;
+    padding: 34px 32px 26px;
+    text-align: center;
+    box-shadow: 0 24px 60px rgba(0,0,0,.45), 0 0 0 1px rgba(255,255,255,.02) inset;
+    margin-bottom: 18px;
+}
+.login-logo {
+    width: 66px;
+    height: 66px;
+    margin: 0 auto 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 2rem;
+    border-radius: 18px;
+    background: linear-gradient(135deg, rgba(45,212,191,.22), rgba(45,212,191,.05));
+    border: 1px solid rgba(45,212,191,.35);
+    box-shadow: 0 8px 24px rgba(45,212,191,.18);
+}
+.login-title {
+    color: var(--radar-ink);
+    font-size: 1.55rem;
+    font-weight: 900;
+    letter-spacing: -.01em;
+    line-height: 1.15;
+    margin: 0 0 6px;
+}
+.login-subtitle {
+    color: var(--radar-muted);
+    font-size: .94rem;
+    margin: 0;
+}
+.login-divider {
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(148,163,184,.3), transparent);
+    margin: 20px 0 16px;
+}
+.login-prompt {
+    color: var(--radar-blue);
+    font-size: .9rem;
+    font-weight: 650;
+    margin: 0;
+}
+.login-footer {
+    text-align: center;
+    color: var(--radar-muted);
+    font-size: .78rem;
+    margin-top: 14px;
+    opacity: .8;
+}
+/* Style the form holding the password field */
+[data-testid="stForm"]:has(#login_form),
+.stForm:has([data-testid="stTextInput"]) {
+    border: none;
+}
+.login-card + div [data-testid="stTextInput"] label,
+.login-card ~ div [data-testid="stTextInput"] label {
+    font-weight: 650;
+    color: var(--radar-ink);
+}
 .main .block-container {
     padding-top: 1.25rem;
     padding-bottom: 2.5rem;
