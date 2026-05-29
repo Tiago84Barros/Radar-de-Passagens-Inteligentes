@@ -158,6 +158,11 @@ CSS = """
 }
 .metric-info:hover { opacity: 1; }
 .metric-card { cursor: default; }
+
+/* Hint that these labels carry an explanatory tooltip (title attr) */
+.deal-card-meta[title], .deal-card-miles[title], .deal-card-price[title],
+.deal-badge[title], .airline-cmp-miles[title], .airline-cmp-price[title],
+.airline-best-badge[title], .airline-demo-tag[title] { cursor: help; }
 .metric-value {
     color: var(--radar-ink);
     font-size: 1.65rem;

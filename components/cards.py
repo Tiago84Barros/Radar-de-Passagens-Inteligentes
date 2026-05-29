@@ -79,6 +79,37 @@ def _date_range_label(departure: date | None, return_date: date | None) -> str:
     return "Data a confirmar"
 
 
+def _airline_display_name(airline: str) -> str:
+    """Resolve an IATA code (e.g. 'AV') to a friendly name (e.g. 'Avianca')."""
+    raw = (airline or "").strip()
+    if not raw or raw in {"–", "-"} or raw.lower() in {"não informada", "nao informada"}:
+        return "Companhia não informada"
+    up = raw.upper()
+    if up in _AIRLINE_DIRECTORY:
+        return _AIRLINE_DIRECTORY[up]
+    return raw
+
+
+# Plain-language explanations reused as hover tooltips across the cards.
+_TIP_SCORE = (
+    "Score de 0 a 100: nota de oportunidade calculada comparando o preço atual ao "
+    "histórico da rota. Quanto maior, melhor o desconto."
+)
+_TIP_CLASS = (
+    "Classificação da oportunidade (Normal, Boa, Ótima, Excelente) com base no score: "
+    "quanto melhor o preço frente ao histórico, maior a classificação."
+)
+_TIP_MILES = (
+    "Estimativa de milhas: preço em R$ ÷ R$ 0,035. É um cálculo aproximado e NÃO "
+    "representa disponibilidade real em Smiles, TudoAzul ou Latam Pass."
+)
+_TIP_CATEGORY = "Voo nacional (dentro do Brasil) ou internacional (destino no exterior)."
+_TIP_CONNECTION = (
+    "Trecho combinado via hub: o preço soma duas passagens. Reserve cada trecho "
+    "separadamente — não é um bilhete único."
+)
+
+
 def _card_id(deal: dict) -> str:
     """Generate a stable short ID for CSS scoping."""
     key = str(deal.get("id") or str(deal.get("origin_iata", "")) + str(deal.get("destination_iata", "")) + str(deal.get("departure_date", "")))
@@ -111,7 +142,7 @@ def _build_card_html(deal: dict) -> str:
     miles = deal.get("estimated_miles") or 0
     miles_label = format_miles(miles)
 
-    airline = deal.get("airline") or "–"
+    airline = _airline_display_name(deal.get("airline") or "")
     booking_link = deal.get("booking_link") or "#"
     is_demo = bool(deal.get("is_demo"))
     via_hub = str(deal.get("via_hub") or "")
@@ -166,12 +197,12 @@ def _build_card_html(deal: dict) -> str:
     dest_country_html = f'<div class="deal-card-country">{dest_country}</div>' if dest_country else ""
 
     # Badges as plain text inside span tags — no nested quotes in attribute values
-    badges = f'<span class="deal-badge {cat_css}">{cat_label}</span>'
-    badges += f'<span class="deal-badge {cls_css}">{cls_label}</span>'
+    badges = f'<span class="deal-badge {cat_css}" title="{_TIP_CATEGORY}">{cat_label}</span>'
+    badges += f'<span class="deal-badge {cls_css}" title="{_TIP_CLASS}">{cls_label}</span>'
     if connection_badge:
-        badges += f'<span class="deal-badge badge-connection">{connection_badge}</span>'
+        badges += f'<span class="deal-badge badge-connection" title="{_TIP_CONNECTION}">{connection_badge}</span>'
     if demo_badge:
-        badges += f'<span class="deal-badge badge-demo">{demo_badge}</span>'
+        badges += f'<span class="deal-badge badge-demo" title="Exemplo ilustrativo (não é uma cotação real).">{demo_badge}</span>'
 
     return (
         f'{scoped_css}'
@@ -185,9 +216,9 @@ def _build_card_html(deal: dict) -> str:
         f'<div class="deal-card-route">{route_display}</div>'
         f'<div class="deal-card-iata">{route_iata}</div>'
         f'<div class="deal-card-dates">&#128197; {date_label}</div>'
-        f'<div class="deal-card-price">{price_label}</div>'
-        f'<div class="deal-card-miles">&#127942; {miles_label} <span class="miles-est-tag">estimadas*</span></div>'
-        f'<div class="deal-card-meta">Score: <strong>{score}/100</strong> &nbsp;&middot;&nbsp; {airline}</div>'
+        f'<div class="deal-card-price" title="Preço total em reais para o período mostrado.">{price_label}</div>'
+        f'<div class="deal-card-miles" title="{_TIP_MILES}">&#127942; {miles_label} <span class="miles-est-tag">milhas estimadas*</span></div>'
+        f'<div class="deal-card-meta" title="{_TIP_SCORE}">Score: <strong>{score}/100</strong> &nbsp;&middot;&nbsp; {airline}</div>'
         f'{combined_note}'
         f'{link_btn}'
         f'</div>'
@@ -257,9 +288,16 @@ def render_airline_comparison(deals: list[dict], route_label: str = "") -> None:
         price = _fmt_brl(float(deal.get("price_brl") or 0))
         miles = format_miles(deal.get("estimated_miles") or 0)
         is_best = i == 0
-        best_badge = '<span class="airline-best-badge">★ Melhor escolha</span>' if is_best else ""
+        best_badge = (
+            '<span class="airline-best-badge" title="Menor preço entre todas as companhias '
+            'para esta rota.">★ Melhor escolha</span>'
+            if is_best else ""
+        )
         best_cls = " airline-cmp-card-best" if is_best else ""
-        demo_tag = '<span class="airline-demo-tag">demo</span>' if deal.get("is_demo") else ""
+        demo_tag = (
+            '<span class="airline-demo-tag" title="Exemplo ilustrativo (não é uma cotação real).">demo</span>'
+            if deal.get("is_demo") else ""
+        )
 
         link = str(deal.get("booking_link") or "")
         if link and link != "#":
@@ -271,8 +309,8 @@ def render_airline_comparison(deals: list[dict], route_label: str = "") -> None:
             f'<div class="airline-cmp-card{best_cls}">'
             f'<div class="airline-cmp-top">{logo}{best_badge}</div>'
             f'<div class="airline-cmp-name">{name}{demo_tag}</div>'
-            f'<div class="airline-cmp-price">{price}</div>'
-            f'<div class="airline-cmp-miles">🏆 {miles} <span class="miles-est-tag">est.*</span></div>'
+            f'<div class="airline-cmp-price" title="Menor preço encontrado nesta companhia para a rota.">{price}</div>'
+            f'<div class="airline-cmp-miles" title="{_TIP_MILES}">🏆 {miles} <span class="miles-est-tag">milhas est.*</span></div>'
             f'{btn}'
             f'</div>'
         )
