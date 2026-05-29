@@ -748,12 +748,16 @@ def render_searches(summary: dict, df_quotes: pd.DataFrame) -> None:
         return
     df = searches_df(searches, df_quotes)
     display = df.copy()
+    display["milhas est."] = display["menor preço encontrado"].apply(
+        lambda p: format_miles(estimate_miles(float(p))) if pd.notna(p) and p else "–"
+    )
     display["data de ida"] = display["data de ida"].map(format_date)
     display["data de volta"] = display["data de volta"].map(format_date)
     display["última consulta"] = display["última consulta"].map(format_datetime)
     display["preço máximo"] = display["preço máximo"].map(money)
     display["menor preço encontrado"] = display["menor preço encontrado"].map(money)
     st.dataframe(display, use_container_width=True, hide_index=True)
+    st.caption("* Milhas estimadas com base em R$ 0,035/milha. Não representa disponibilidade real em programas de fidelidade.")
 
     st.markdown("**Pausar ou reativar monitoramento**")
     for start in range(0, len(searches), 4):
@@ -839,9 +843,11 @@ def render_year_price_calendar(summary: dict, df: pd.DataFrame) -> None:
 
     table = best_overall.sort_values("preço").head(12)[["ida_dt", "companhia", "preço", "provedor", "link"]].copy()
     table["data de ida"] = table["ida_dt"].map(format_date)
+    table["milhas est."] = table["preço"].apply(lambda p: format_miles(estimate_miles(float(p or 0))))
     table["preço"] = table["preço"].map(format_brl)
-    table = table[["data de ida", "companhia", "preço", "provedor", "link"]]
+    table = table[["data de ida", "companhia", "preço", "milhas est.", "provedor", "link"]]
     st.dataframe(table, use_container_width=True, hide_index=True)
+    st.caption("* Milhas estimadas com base em R$ 0,035/milha. Não representa disponibilidade real em programas de fidelidade.")
 
 
 def render_history(df: pd.DataFrame) -> None:
@@ -875,11 +881,16 @@ def render_history(df: pd.DataFrame) -> None:
     table = filtered[
         ["rota", "ida", "volta", "companhia", "preço", "moeda", "provedor", "classificação", "detectado_em", "link"]
     ].copy()
+    table["milhas est."] = table["preço"].apply(lambda p: format_miles(estimate_miles(float(p or 0))))
     table["ida"] = table["ida"].map(format_date)
     table["volta"] = table["volta"].map(format_date)
     table["preço"] = table["preço"].map(format_brl)
     table["detectado_em"] = table["detectado_em"].map(format_datetime)
+    table = table[
+        ["rota", "ida", "volta", "companhia", "preço", "milhas est.", "moeda", "provedor", "classificação", "detectado_em", "link"]
+    ]
     st.dataframe(table, use_container_width=True, hide_index=True)
+    st.caption("* Milhas estimadas com base em R$ 0,035/milha. Não representa disponibilidade real em programas de fidelidade.")
 
 
 # ─── Tab: Milhas ──────────────────────────────────────────────────────────────

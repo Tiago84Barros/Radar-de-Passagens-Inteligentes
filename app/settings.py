@@ -58,6 +58,7 @@ class Settings:
     smtp_password: str | None
     alert_from_email: str
     enable_airline_scrapers: bool
+    enable_airline_site_scrapers: bool
 
     def __init__(self) -> None:
         self.database_url = get_config_value("DATABASE_URL") or _database_url_from_parts() or "sqlite:///./radar.db"
@@ -76,6 +77,7 @@ class Settings:
         self.smtp_password = get_config_value("SMTP_PASSWORD")
         self.alert_from_email = get_config_value("ALERT_FROM_EMAIL", "alerts@radar.local") or "alerts@radar.local"
         self.enable_airline_scrapers = _as_bool(get_config_value("ENABLE_AIRLINE_SCRAPERS", "false"))
+        self.enable_airline_site_scrapers = _as_bool(get_config_value("ENABLE_AIRLINE_SITE_SCRAPERS", "false"))
 
 
 def _normalize_amadeus_env(value: str) -> str:

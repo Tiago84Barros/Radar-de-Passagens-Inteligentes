@@ -6,6 +6,7 @@ from app.settings import get_settings
 from scrapers.azul_scraper import AzulScraper
 from scrapers.base_scraper import ScraperError
 from scrapers.gol_scraper import GolScraper
+from scrapers.google_flights_scraper import GoogleFlightsScraper
 from scrapers.latam_scraper import LatamScraper
 
 
@@ -15,7 +16,12 @@ _LAST_SCRAPER_DIAGNOSTICS: list[dict[str, str]] = []
 def configured_scrapers() -> list:
     if not get_settings().enable_airline_scrapers:
         return []
-    return [AzulScraper(), GolScraper(), LatamScraper()]
+    # Google Flights is the primary aggregator source. The per-airline
+    # scrapers remain available but are disabled by default because their
+    # sites have stronger anti-bot protection and lower success rates.
+    if get_settings().enable_airline_site_scrapers:
+        return [GoogleFlightsScraper(), AzulScraper(), GolScraper(), LatamScraper()]
+    return [GoogleFlightsScraper()]
 
 
 def search_all_scrapers(search_params: dict[str, Any]) -> list[dict[str, Any]]:
