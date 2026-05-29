@@ -59,6 +59,10 @@ class Settings:
     alert_from_email: str
     enable_airline_scrapers: bool
     enable_airline_site_scrapers: bool
+    github_token: str | None
+    github_repo: str | None
+    github_workflow: str
+    github_ref: str
 
     def __init__(self) -> None:
         self.database_url = get_config_value("DATABASE_URL") or _database_url_from_parts() or "sqlite:///./radar.db"
@@ -78,6 +82,13 @@ class Settings:
         self.alert_from_email = get_config_value("ALERT_FROM_EMAIL", "alerts@radar.local") or "alerts@radar.local"
         self.enable_airline_scrapers = _as_bool(get_config_value("ENABLE_AIRLINE_SCRAPERS", "false"))
         self.enable_airline_site_scrapers = _as_bool(get_config_value("ENABLE_AIRLINE_SITE_SCRAPERS", "false"))
+        # GitHub Actions trigger: lets the app fire the monitor workflow on demand
+        # (scraping cannot run inside Streamlit Cloud). The scheduled cron in
+        # monitor.yml keeps running regardless, so coverage continues with the app off.
+        self.github_token = get_config_value("GITHUB_TOKEN") or get_config_value("GH_TOKEN")
+        self.github_repo = get_config_value("GITHUB_REPO")  # e.g. "Tiago84Barros/Radar-de-Passagens-Inteligentes"
+        self.github_workflow = get_config_value("GITHUB_WORKFLOW", "monitor.yml") or "monitor.yml"
+        self.github_ref = get_config_value("GITHUB_REF", "main") or "main"
 
 
 def _normalize_amadeus_env(value: str) -> str:

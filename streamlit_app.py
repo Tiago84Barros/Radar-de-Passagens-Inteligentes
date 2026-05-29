@@ -25,6 +25,7 @@ from components.cards import render_airline_comparison, render_deal_cards_sectio
 from data.destinations_catalog import BRAZIL_IATAS
 from providers.travelpayouts_provider import TravelPayoutsProvider, TravelPayoutsProviderError
 from services.air_network import find_candidate_hubs, hub_route_label
+from services.github_actions_service import is_configured as github_trigger_configured, trigger_monitor
 from services.miles_service import DEFAULT_CENTS_PER_MILE, estimate_miles, format_miles
 from services.opportunity_service import (
     get_airline_comparison,
@@ -471,6 +472,19 @@ def render_sidebar(summary: dict, provider_status: dict[str, Any], db_connected:
         st.subheader("🔍 Nova busca de passagem")
         if st.session_state.get("last_location_resolution"):
             st.info(st.session_state["last_location_resolution"])
+        # Feedback from the previous submit (survives st.rerun via session_state)
+        _save_fb = st.session_state.pop("last_search_feedback", None)
+        if _save_fb:
+            st.success(_save_fb["text"])
+        _trig_fb = st.session_state.pop("last_trigger_feedback", None)
+        if _trig_fb:
+            _lvl = _trig_fb.get("level", "info")
+            if _lvl == "warning":
+                st.warning(_trig_fb["text"])
+            elif _lvl == "caption":
+                st.caption(_trig_fb["text"])
+            else:
+                st.info(_trig_fb["text"])
         origin_input, selected_origin = _render_location_picker("Origem", "origin")
         destination_input, selected_destination = _render_location_picker("Destino", "destination")
 
@@ -541,9 +555,38 @@ def render_sidebar(summary: dict, provider_status: dict[str, Any], db_connected:
                     db.flush()
                     saved = run_search_once(db, search, include_year_calendar=True)
                 if start_monitoring:
-                    st.success(f"🛰️ Monitoramento iniciado. {saved} cotação(ões) salvas.")
+                    save_msg = f"🛰️ Monitoramento iniciado. {saved} cotação(ões) salvas."
                 else:
-                    st.success(f"✅ Busca concluída. {saved} cotação(ões) salvas.")
+                    save_msg = f"✅ Busca concluída. {saved} cotação(ões) salvas."
+
+                # Fire the scraping workflow on GitHub Actions right away so the
+                # full scraping (Google/GOL/LATAM/Azul) runs immediately instead
+                # of waiting for the next scheduled cron. The cron keeps running
+                # on its own, so monitoring continues even with the app closed.
+                trigger_msg = None
+                trigger_level = "info"
+                if github_trigger_configured():
+                    dispatch = trigger_monitor(force=True)
+                    if dispatch.ok:
+                        trigger_msg = (
+                            "🚀 " + dispatch.message + " Atualize a página em ~2-3 min "
+                            "para ver os preços por companhia (R$ e milhas)."
+                        )
+                        trigger_level = "info"
+                    else:
+                        trigger_msg = "⚠️ " + dispatch.message
+                        trigger_level = "warning"
+                else:
+                    trigger_msg = (
+                        "ℹ️ Para coletar os preços agora via scraping, configure GITHUB_TOKEN e "
+                        "GITHUB_REPO. Sem isso, o monitor agendado coleta em até 30 min."
+                    )
+                    trigger_level = "caption"
+
+                # Persist feedback across the rerun below (messages set here would
+                # otherwise be wiped by st.rerun()).
+                st.session_state["last_search_feedback"] = {"text": save_msg, "level": "success"}
+                st.session_state["last_trigger_feedback"] = {"text": trigger_msg, "level": trigger_level}
                 st.rerun()
 
         st.divider()
