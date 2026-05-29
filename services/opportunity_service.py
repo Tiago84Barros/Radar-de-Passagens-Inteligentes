@@ -61,6 +61,7 @@ def _df_row_to_deal(row: pd.Series) -> dict:
         "is_demo": False,
         "stops": row.get("escalas"),
         "duration_minutes": row.get("duração_min"),
+        "via_hub": str(row.get("via_hub") or ""),
         # Destination visual fields
         "image_url": dest_info.get("image_url", ""),
         "postcard_label": dest_info.get("postcard_label", ""),

@@ -271,6 +271,87 @@ CSS = """
     line-height: 1.15;
 }
 .airline-cmp-miles { color: var(--radar-amber); font-size: .86rem; }
+.airline-cmp-route {
+    font-size: .82rem;
+    color: var(--radar-muted);
+    margin-top: 4px;
+    cursor: help;
+}
+.airline-cmp-duration {
+    font-size: .82rem;
+    color: var(--radar-ink);
+    margin-top: 2px;
+    cursor: help;
+}
+.airline-cmp-duration-missing { color: var(--radar-muted); font-style: italic; }
+.route-type {
+    display: inline-block;
+    font-size: .68rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: .03em;
+    padding: 1px 7px;
+    border-radius: 999px;
+    margin-right: 5px;
+    vertical-align: middle;
+}
+.route-type-direct {
+    background: rgba(45,212,191,.18);
+    color: var(--radar-teal);
+    border: 1px solid rgba(45,212,191,.4);
+}
+.route-type-combined {
+    background: rgba(168,131,255,.16);
+    color: #c4b0ff;
+    border: 1px solid rgba(168,131,255,.4);
+}
+.route-type-stops {
+    background: rgba(251,191,36,.14);
+    color: var(--radar-amber);
+    border: 1px solid rgba(251,191,36,.36);
+}
+/* Direct-vs-best summary banner */
+.cmp-summary {
+    background: rgba(13,30,48,.55);
+    border: 1px solid rgba(255,255,255,.08);
+    border-radius: 12px;
+    padding: 12px 16px;
+    margin: 4px 0 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.cmp-summary-row {
+    font-size: .9rem;
+    color: var(--radar-ink);
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.cmp-summary-tag {
+    font-size: .68rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: .03em;
+    padding: 2px 8px;
+    border-radius: 999px;
+}
+.cmp-summary-tag.tag-best {
+    background: rgba(45,212,191,.18);
+    color: var(--radar-teal);
+    border: 1px solid rgba(45,212,191,.4);
+}
+.cmp-summary-tag.tag-direct {
+    background: rgba(168,131,255,.16);
+    color: #c4b0ff;
+    border: 1px solid rgba(168,131,255,.4);
+}
+.cmp-summary-tag.tag-none {
+    background: rgba(148,163,184,.14);
+    color: var(--radar-muted);
+    border: 1px solid rgba(148,163,184,.3);
+}
 .airline-cmp-btn {
     display: block;
     text-align: center;

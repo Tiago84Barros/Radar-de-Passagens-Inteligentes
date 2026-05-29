@@ -316,8 +316,34 @@ def _airline_visual(airline: str) -> tuple[str, str]:
     return raw, '<span class="airline-logo-fallback">✈️</span>'
 
 
+def _is_direct(deal: dict) -> bool:
+    """A deal is direct when it has no hub combination and zero stops."""
+    if str(deal.get("via_hub") or "").strip():
+        return False
+    stops = deal.get("stops")
+    try:
+        return int(float(stops)) == 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _route_summary(deal: dict) -> tuple[str, str, str]:
+    """Return (route_text, type_label, type_css) describing how the route is flown."""
+    origin = deal.get("origin_iata") or deal.get("origin_city") or "–"
+    dest = deal.get("destination_iata") or deal.get("destination_city") or "–"
+    via_hub = str(deal.get("via_hub") or "").strip()
+    if via_hub:
+        return f"{origin} → {via_hub} → {dest}", "Via " + via_hub, "route-type-combined"
+    if _is_direct(deal):
+        return f"{origin} → {dest}", "Direto", "route-type-direct"
+    stops_label = _stops_label(deal.get("stops"))
+    label = stops_label.capitalize() if stops_label else "Com conexão"
+    return f"{origin} → {dest}", label, "route-type-stops"
+
+
 def render_airline_comparison(deals: list[dict], route_label: str = "") -> None:
-    """Render a per-airline price comparison, cheapest first, with logos."""
+    """Render a per-airline price comparison, cheapest first, with logos,
+    route type (direct vs combined), total travel time and stops."""
     if not deals:
         return
 
@@ -327,7 +353,53 @@ def render_airline_comparison(deals: list[dict], route_label: str = "") -> None:
     st.markdown(f'<div class="deals-section-header">{title}</div>', unsafe_allow_html=True)
     st.markdown(
         '<p class="deals-section-subtitle">Menor preço encontrado em cada companhia. '
-        'A mais barata aparece primeiro, marcada como <strong>melhor escolha</strong>.</p>',
+        'A mais barata aparece primeiro, marcada como <strong>melhor escolha</strong>. '
+        'Cada cartão mostra o tipo de rota (direto ou via conexão) e o tempo total de viagem.</p>',
+        unsafe_allow_html=True,
+    )
+
+    # ── Summary banner: best overall vs cheapest direct option ──────────────
+    best_overall = deals[0]
+    direct_deals = [d for d in deals if _is_direct(d)]
+    cheapest_direct = min(
+        direct_deals, key=lambda d: float(d.get("price_brl") or 0)
+    ) if direct_deals else None
+
+    best_price = float(best_overall.get("price_brl") or 0)
+    best_route, best_type, _ = _route_summary(best_overall)
+    best_dur = _fmt_duration(best_overall.get("duration_minutes"))
+    best_dur_txt = f" · ⏱ {best_dur}" if best_dur else ""
+    best_line = (
+        f'<div class="cmp-summary-row"><span class="cmp-summary-tag tag-best">Melhor preço</span>'
+        f'<strong>{_fmt_brl(best_price)}</strong> · {best_type} ({best_route}){best_dur_txt}</div>'
+    )
+
+    if cheapest_direct is not None and cheapest_direct is not best_overall:
+        d_price = float(cheapest_direct.get("price_brl") or 0)
+        d_route, _, _ = _route_summary(cheapest_direct)
+        d_dur = _fmt_duration(cheapest_direct.get("duration_minutes"))
+        d_dur_txt = f" · ⏱ {d_dur}" if d_dur else ""
+        diff = d_price - best_price
+        diff_txt = (
+            f" · +{_fmt_brl(diff)} que o mais barato" if diff > 0 else " · mesmo preço"
+        )
+        direct_line = (
+            f'<div class="cmp-summary-row"><span class="cmp-summary-tag tag-direct">Voo direto</span>'
+            f'<strong>{_fmt_brl(d_price)}</strong> · {d_route}{d_dur_txt}{diff_txt}</div>'
+        )
+    elif cheapest_direct is not None:
+        direct_line = (
+            '<div class="cmp-summary-row"><span class="cmp-summary-tag tag-direct">Voo direto</span>'
+            'O mais barato já é um voo direto. 🎉</div>'
+        )
+    else:
+        direct_line = (
+            '<div class="cmp-summary-row"><span class="cmp-summary-tag tag-none">Voo direto</span>'
+            'Nenhum voo direto encontrado nesta rota — todas as opções têm conexão.</div>'
+        )
+
+    st.markdown(
+        f'<div class="cmp-summary">{best_line}{direct_line}</div>',
         unsafe_allow_html=True,
     )
 
@@ -348,6 +420,20 @@ def render_airline_comparison(deals: list[dict], route_label: str = "") -> None:
             if deal.get("is_demo") else ""
         )
 
+        route_text, type_label, type_css = _route_summary(deal)
+        route_html = (
+            f'<div class="airline-cmp-route" title="Trajeto do voo. &#39;Direto&#39; = sem conexão; '
+            f'&#39;Via HUB&#39; = combina dois trechos.">'
+            f'<span class="route-type {type_css}">{type_label}</span> {route_text}</div>'
+        )
+        dur = _fmt_duration(deal.get("duration_minutes"))
+        dur_html = (
+            f'<div class="airline-cmp-duration" title="{_TIP_DURATION}">&#9201; {dur} no total</div>'
+            if dur else
+            '<div class="airline-cmp-duration airline-cmp-duration-missing" '
+            'title="Tempo total de viagem não informado por esta cotação.">⏱ tempo não informado</div>'
+        )
+
         link = str(deal.get("booking_link") or "")
         if link and link != "#":
             btn = f'<a class="airline-cmp-btn" href="{link}" target="_blank" rel="noopener">Ver voo →</a>'
@@ -359,6 +445,8 @@ def render_airline_comparison(deals: list[dict], route_label: str = "") -> None:
             f'<div class="airline-cmp-top">{logo}{best_badge}</div>'
             f'<div class="airline-cmp-name">{name}{demo_tag}</div>'
             f'<div class="airline-cmp-price" title="Menor preço encontrado nesta companhia para a rota.">{price}</div>'
+            f'{route_html}'
+            f'{dur_html}'
             f'<div class="airline-cmp-miles" title="{_TIP_MILES}">🏆 {miles} <span class="miles-est-tag">milhas est.*</span></div>'
             f'{btn}'
             f'</div>'
