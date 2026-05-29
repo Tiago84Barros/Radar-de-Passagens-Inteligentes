@@ -75,21 +75,25 @@ def require_password() -> None:
         return
     load_custom_css()
 
-    # Centered, professional login card
-    st.markdown('<div class="login-page">', unsafe_allow_html=True)
-    _, mid, _ = st.columns([1, 1.15, 1])
+    # Centered, professional login card. Branding lives INSIDE the form so the
+    # whole thing reads as one cohesive card; the card styling is scoped to the
+    # login form via a :has(.login-brand) selector so the app's other forms
+    # are unaffected.
+    st.markdown('<div class="login-page"></div>', unsafe_allow_html=True)
+    _, mid, _ = st.columns([1, 1.25, 1])
     with mid:
-        st.markdown(
-            '<div class="login-card">'
-            '<div class="login-logo">✈️</div>'
-            '<h1 class="login-title">Radar de Passagens Inteligentes</h1>'
-            '<p class="login-subtitle">Monitoramento de tarifas e oportunidades de voos.</p>'
-            '<div class="login-divider"></div>'
-            '<p class="login-prompt">🔒 Área restrita — informe sua senha para continuar.</p>'
-            '</div>',
-            unsafe_allow_html=True,
-        )
         with st.form("login_form", clear_on_submit=False):
+            st.markdown(
+                '<div class="login-brand">'
+                '<div class="login-logo">✈️</div>'
+                '<div class="login-title">Radar de Passagens</div>'
+                '<div class="login-title">Inteligentes</div>'
+                '<div class="login-subtitle">Monitoramento de tarifas e oportunidades de voos</div>'
+                '<div class="login-divider"></div>'
+                '<div class="login-prompt">🔒 Área restrita — informe sua senha para continuar</div>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
             password = st.text_input(
                 "Senha de acesso",
                 type="password",
@@ -102,10 +106,9 @@ def require_password() -> None:
                 st.rerun()
             st.error("Senha inválida. Verifique e tente novamente.")
         st.markdown(
-            '<p class="login-footer">Acesso protegido · uso pessoal</p>',
+            '<div class="login-footer">Acesso protegido · uso pessoal</div>',
             unsafe_allow_html=True,
         )
-    st.markdown('</div>', unsafe_allow_html=True)
     st.stop()
 
 

@@ -28,75 +28,93 @@ CSS = """
     position: fixed;
     inset: 0;
     background:
-        radial-gradient(1200px 600px at 50% -10%, rgba(45,212,191,.12), transparent 60%),
-        radial-gradient(900px 500px at 100% 110%, rgba(147,197,253,.10), transparent 60%),
+        radial-gradient(1100px 620px at 50% -8%, rgba(45,212,191,.14), transparent 58%),
+        radial-gradient(900px 520px at 92% 108%, rgba(147,197,253,.10), transparent 60%),
         var(--radar-bg);
     z-index: -1;
 }
-/* Lift the centered column toward the vertical middle */
-.main .block-container:has(.login-card) { padding-top: 6vh; }
-.login-card {
-    background: linear-gradient(180deg, rgba(19,35,58,.92) 0%, rgba(15,27,45,.92) 100%);
-    border: 1px solid rgba(45,212,191,.22);
-    border-radius: 20px;
-    padding: 34px 32px 26px;
-    text-align: center;
-    box-shadow: 0 24px 60px rgba(0,0,0,.45), 0 0 0 1px rgba(255,255,255,.02) inset;
-    margin-bottom: 18px;
+/* Push the login card toward the vertical middle and hide chrome */
+.main .block-container:has(.login-brand) { padding-top: 8vh; max-width: 1440px; }
+.main .block-container:has(.login-brand) [data-testid="stHeader"],
+header:has(~ .stApp .login-brand) { display: none; }
+
+/* The login card = the form that contains .login-brand (scoped, won't touch other forms) */
+[data-testid="stForm"]:has(.login-brand) {
+    background: linear-gradient(180deg, rgba(20,37,61,.96) 0%, rgba(13,24,42,.96) 100%) !important;
+    border: 1px solid rgba(45,212,191,.28) !important;
+    border-radius: 22px !important;
+    padding: 38px 36px 30px !important;
+    box-shadow: 0 30px 70px rgba(0,0,0,.5), 0 0 0 1px rgba(255,255,255,.03) inset !important;
 }
+.login-brand { text-align: center; margin-bottom: 22px; }
 .login-logo {
-    width: 66px;
-    height: 66px;
-    margin: 0 auto 14px;
+    width: 70px;
+    height: 70px;
+    margin: 0 auto 16px;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 2rem;
-    border-radius: 18px;
-    background: linear-gradient(135deg, rgba(45,212,191,.22), rgba(45,212,191,.05));
-    border: 1px solid rgba(45,212,191,.35);
-    box-shadow: 0 8px 24px rgba(45,212,191,.18);
+    font-size: 2.1rem;
+    border-radius: 20px;
+    background: linear-gradient(135deg, rgba(45,212,191,.26), rgba(45,212,191,.04));
+    border: 1px solid rgba(45,212,191,.4);
+    box-shadow: 0 10px 28px rgba(45,212,191,.22);
 }
-.login-title {
-    color: var(--radar-ink);
-    font-size: 1.55rem;
-    font-weight: 900;
-    letter-spacing: -.01em;
-    line-height: 1.15;
-    margin: 0 0 6px;
+.login-brand .login-title {
+    color: var(--radar-ink) !important;
+    font-size: 1.7rem !important;
+    font-weight: 900 !important;
+    letter-spacing: -.02em !important;
+    line-height: 1.12 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    text-align: center !important;
 }
-.login-subtitle {
-    color: var(--radar-muted);
-    font-size: .94rem;
-    margin: 0;
+.login-brand .login-subtitle {
+    color: var(--radar-muted) !important;
+    font-size: .95rem !important;
+    margin: 10px 0 0 !important;
+    line-height: 1.4;
 }
-.login-divider {
+.login-brand .login-divider {
     height: 1px;
-    background: linear-gradient(90deg, transparent, rgba(148,163,184,.3), transparent);
-    margin: 20px 0 16px;
+    background: linear-gradient(90deg, transparent, rgba(148,163,184,.35), transparent);
+    margin: 22px 0 16px;
 }
-.login-prompt {
-    color: var(--radar-blue);
-    font-size: .9rem;
-    font-weight: 650;
-    margin: 0;
+.login-brand .login-prompt {
+    color: var(--radar-blue) !important;
+    font-size: .9rem !important;
+    font-weight: 650 !important;
+    margin: 0 !important;
+}
+/* Inputs / button inside the login card */
+[data-testid="stForm"]:has(.login-brand) [data-testid="stTextInput"] label {
+    font-weight: 700;
+    color: var(--radar-ink);
+}
+[data-testid="stForm"]:has(.login-brand) [data-baseweb="input"] {
+    border-radius: 10px;
+}
+[data-testid="stForm"]:has(.login-brand) .stButton > button,
+[data-testid="stForm"]:has(.login-brand) [data-testid="stFormSubmitButton"] > button {
+    border-radius: 11px;
+    font-weight: 800;
+    font-size: .98rem;
+    padding: 11px 0;
+    margin-top: 6px;
+    background: linear-gradient(135deg, #2DD4BF, #14b8a6);
+    border: none;
+    box-shadow: 0 8px 22px rgba(45,212,191,.28);
+}
+[data-testid="stForm"]:has(.login-brand) [data-testid="stFormSubmitButton"] > button:hover {
+    filter: brightness(1.06);
 }
 .login-footer {
     text-align: center;
     color: var(--radar-muted);
     font-size: .78rem;
-    margin-top: 14px;
-    opacity: .8;
-}
-/* Style the form holding the password field */
-[data-testid="stForm"]:has(#login_form),
-.stForm:has([data-testid="stTextInput"]) {
-    border: none;
-}
-.login-card + div [data-testid="stTextInput"] label,
-.login-card ~ div [data-testid="stTextInput"] label {
-    font-weight: 650;
-    color: var(--radar-ink);
+    margin-top: 16px;
+    opacity: .75;
 }
 .main .block-container {
     padding-top: 1.25rem;
