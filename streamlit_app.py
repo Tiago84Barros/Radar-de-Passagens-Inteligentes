@@ -489,12 +489,13 @@ def render_sidebar(summary: dict, provider_status: dict[str, Any], db_connected:
         destination_input, selected_destination = _render_location_picker("Destino", "destination")
 
         with st.form("new_search_form", clear_on_submit=False):
-            departure = st.date_input("Data de ida", value=None)
+            departure = st.date_input("Data de ida", value=None, format="DD/MM/YYYY")
             trip_label = st.selectbox("Tipo de viagem", list(TRIP_TYPE_OPTIONS.keys()), index=1)
             return_date = st.date_input(
                 "Data de volta",
                 value=None,
                 disabled=TRIP_TYPE_OPTIONS[trip_label] == "one_way",
+                format="DD/MM/YYYY",
             )
             adults = st.number_input("Adultos", min_value=1, max_value=9, value=1)
             max_price = st.number_input("Preço máximo (R$)", min_value=100.0, value=3200.0, step=50.0)
