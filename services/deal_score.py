@@ -38,8 +38,19 @@ def calculate_deal_score(quote: Any, max_price: float | None = None, historical_
         score += 5
     elif stops and stops > 1:
         score -= 5
-    if duration and duration <= 240:
-        score += 3
+    # Total travel time (ida + volta + conexões) as a graduated factor: short
+    # trips are rewarded, very long ones penalized, so duration weighs in the score.
+    if duration:
+        if duration <= 180:        # até 3h
+            score += 6
+        elif duration <= 300:      # até 5h
+            score += 3
+        elif duration <= 720:      # até 12h
+            score += 0
+        elif duration <= 1080:     # até 18h
+            score -= 4
+        else:                      # mais de 18h
+            score -= 8
     if source == "travelpayouts":
         score += 3
 

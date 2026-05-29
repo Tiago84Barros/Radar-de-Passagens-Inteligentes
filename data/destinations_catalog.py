@@ -389,11 +389,90 @@ DESTINATIONS: dict[str, dict] = {
         "postcard_label": "Shibuya, Tóquio",
         "gradient": _INTL_GRADIENT,
     },
+    "NAT": {
+        "city": "Natal",
+        "state": "RN",
+        "country": "Brasil",
+        "iata": "NAT",
+        "category": "national",
+        "image_url": "https://images.unsplash.com/photo-1593105544559-ecb03bf76f82?w=640&q=80&auto=format&fit=crop",
+        "postcard_label": "Praia de Ponta Negra, Natal",
+        "gradient": _NATIONAL_GRADIENT,
+    },
+    "MCZ": {
+        "city": "Maceió",
+        "state": "AL",
+        "country": "Brasil",
+        "iata": "MCZ",
+        "category": "national",
+        "image_url": "https://images.unsplash.com/photo-1589330694653-ded6df03f754?w=640&q=80&auto=format&fit=crop",
+        "postcard_label": "Praia de Pajuçara, Maceió",
+        "gradient": _NATIONAL_GRADIENT,
+    },
+    "VCP": {
+        "city": "Campinas",
+        "state": "SP",
+        "country": "Brasil",
+        "iata": "VCP",
+        "category": "national",
+        "image_url": "https://images.unsplash.com/photo-1554168848-228452c09d60?w=640&q=80&auto=format&fit=crop",
+        "postcard_label": "Campinas, São Paulo",
+        "gradient": _NATIONAL_GRADIENT,
+    },
+    "VIX": {
+        "city": "Vitória",
+        "state": "ES",
+        "country": "Brasil",
+        "iata": "VIX",
+        "category": "national",
+        "image_url": "https://images.unsplash.com/photo-1591202468672-3a6c41f8a26b?w=640&q=80&auto=format&fit=crop",
+        "postcard_label": "Vitória, Espírito Santo",
+        "gradient": _NATIONAL_GRADIENT,
+    },
+    "PMW": {
+        "city": "Palmas",
+        "state": "TO",
+        "country": "Brasil",
+        "iata": "PMW",
+        "category": "national",
+        "image_url": "https://images.unsplash.com/photo-1516815231560-8f41ec531527?w=640&q=80&auto=format&fit=crop",
+        "postcard_label": "Palmas, Tocantins",
+        "gradient": _NATIONAL_GRADIENT,
+    },
 }
 
 
+# Generic real travel photos used as postcard fallback for destinations that
+# are not individually catalogued. Picked deterministically by IATA so the same
+# airport always shows the same image. They are intentionally scenic/generic
+# (not a specific landmark) so we never imply a wrong location.
+_FALLBACK_NATIONAL_IMAGES: tuple[str, ...] = (
+    "https://images.unsplash.com/photo-1483729558449-99ef09a8c325?w=640&q=80&auto=format&fit=crop",
+    "https://images.unsplash.com/photo-1516815231560-8f41ec531527?w=640&q=80&auto=format&fit=crop",
+    "https://images.unsplash.com/photo-1544989164-31dc3c645987?w=640&q=80&auto=format&fit=crop",
+    "https://images.unsplash.com/photo-1619546952812-520e98064a52?w=640&q=80&auto=format&fit=crop",
+)
+_FALLBACK_INTL_IMAGES: tuple[str, ...] = (
+    "https://images.unsplash.com/photo-1488646953014-85cb44e25828?w=640&q=80&auto=format&fit=crop",
+    "https://images.unsplash.com/photo-1502602898657-3e91760cbb34?w=640&q=80&auto=format&fit=crop",
+    "https://images.unsplash.com/photo-1500835556837-99ac94a94552?w=640&q=80&auto=format&fit=crop",
+    "https://images.unsplash.com/photo-1469854523086-cc02fe5d8800?w=640&q=80&auto=format&fit=crop",
+)
+
+
+def _fallback_image(iata: str, is_national: bool) -> str:
+    """Pick a stable generic travel photo for an uncatalogued destination."""
+    pool = _FALLBACK_NATIONAL_IMAGES if is_national else _FALLBACK_INTL_IMAGES
+    if not iata:
+        return pool[0]
+    idx = sum(ord(c) for c in iata) % len(pool)
+    return pool[idx]
+
+
 def get_destination_info(iata: str) -> dict:
-    """Return destination metadata by IATA code. Falls back to generic entry if not found."""
+    """Return destination metadata by IATA code. Falls back to a generic entry
+    (with a stable travel photo) when the airport is not individually catalogued,
+    so every destination card always renders a postcard image."""
     iata = (iata or "").upper().strip()
     if iata in DESTINATIONS:
         return DESTINATIONS[iata]
@@ -403,7 +482,7 @@ def get_destination_info(iata: str) -> dict:
         "country": "Brasil" if is_national else "Internacional",
         "iata": iata,
         "category": "national" if is_national else "international",
-        "image_url": "",
+        "image_url": _fallback_image(iata, is_national),
         "postcard_label": iata,
         "gradient": _NATIONAL_GRADIENT if is_national else _INTL_GRADIENT,
     }

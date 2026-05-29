@@ -79,6 +79,35 @@ def _date_range_label(departure: date | None, return_date: date | None) -> str:
     return "Data a confirmar"
 
 
+def _fmt_duration(minutes) -> str:
+    """Format a total travel time in minutes as 'Xh Ymin' (e.g. 135 -> '2h 15min')."""
+    try:
+        total = int(float(minutes))
+    except (TypeError, ValueError):
+        return ""
+    if total <= 0:
+        return ""
+    h, m = divmod(total, 60)
+    if h and m:
+        return f"{h}h {m:02d}min"
+    if h:
+        return f"{h}h"
+    return f"{m}min"
+
+
+def _stops_label(stops) -> str:
+    """Human label for number of stops."""
+    try:
+        n = int(float(stops))
+    except (TypeError, ValueError):
+        return ""
+    if n <= 0:
+        return "direto"
+    if n == 1:
+        return "1 conexão"
+    return f"{n} conexões"
+
+
 def _airline_display_name(airline: str) -> str:
     """Resolve an IATA code (e.g. 'AV') to a friendly name (e.g. 'Avianca')."""
     raw = (airline or "").strip()
@@ -104,6 +133,10 @@ _TIP_MILES = (
     "representa disponibilidade real em Smiles, TudoAzul ou Latam Pass."
 )
 _TIP_CATEGORY = "Voo nacional (dentro do Brasil) ou internacional (destino no exterior)."
+_TIP_DURATION = (
+    "Tempo total de viagem (ida + volta, incluindo conexões). Voos mais curtos "
+    "ganham pontos no score; trajetos muito longos perdem pontos."
+)
 _TIP_CONNECTION = (
     "Trecho combinado via hub: o preço soma duas passagens. Reserve cada trecho "
     "separadamente — não é um bilhete único."
@@ -143,6 +176,8 @@ def _build_card_html(deal: dict) -> str:
     miles_label = format_miles(miles)
 
     airline = _airline_display_name(deal.get("airline") or "")
+    duration_label = _fmt_duration(deal.get("duration_minutes"))
+    stops_label = _stops_label(deal.get("stops"))
     booking_link = deal.get("booking_link") or "#"
     is_demo = bool(deal.get("is_demo"))
     via_hub = str(deal.get("via_hub") or "")
@@ -196,6 +231,19 @@ def _build_card_html(deal: dict) -> str:
 
     dest_country_html = f'<div class="deal-card-country">{dest_country}</div>' if dest_country else ""
 
+    # Travel-time line: total duration + stops. Hidden when we have no duration data.
+    duration_html = ""
+    if duration_label or stops_label:
+        parts = []
+        if duration_label:
+            parts.append(f"&#9201; {duration_label}")
+        if stops_label:
+            parts.append(stops_label)
+        duration_html = (
+            f'<div class="deal-card-duration" title="{_TIP_DURATION}">'
+            f'{" &nbsp;&middot;&nbsp; ".join(parts)}</div>'
+        )
+
     # Badges as plain text inside span tags — no nested quotes in attribute values
     badges = f'<span class="deal-badge {cat_css}" title="{_TIP_CATEGORY}">{cat_label}</span>'
     badges += f'<span class="deal-badge {cls_css}" title="{_TIP_CLASS}">{cls_label}</span>'
@@ -216,6 +264,7 @@ def _build_card_html(deal: dict) -> str:
         f'<div class="deal-card-route">{route_display}</div>'
         f'<div class="deal-card-iata">{route_iata}</div>'
         f'<div class="deal-card-dates">&#128197; {date_label}</div>'
+        f'{duration_html}'
         f'<div class="deal-card-price" title="Preço total em reais para o período mostrado.">{price_label}</div>'
         f'<div class="deal-card-miles" title="{_TIP_MILES}">&#127942; {miles_label} <span class="miles-est-tag">milhas estimadas*</span></div>'
         f'<div class="deal-card-meta" title="{_TIP_SCORE}">Score: <strong>{score}/100</strong> &nbsp;&middot;&nbsp; {airline}</div>'

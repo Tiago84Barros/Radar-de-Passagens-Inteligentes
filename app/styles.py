@@ -393,6 +393,15 @@ CSS = """
     font-size: .84rem;
     margin-top: 2px;
 }
+.deal-card-duration {
+    color: var(--radar-muted);
+    font-size: .82rem;
+    margin-top: 3px;
+    cursor: help;
+}
+.deal-card-duration[title] {
+    cursor: help;
+}
 .deal-card-price {
     color: var(--radar-teal);
     font-size: 1.65rem;
