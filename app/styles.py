@@ -23,6 +23,61 @@ CSS = """
 /* ── Base ─────────────────────────────────────────────────────── */
 .stApp { background: var(--radar-bg); color: var(--radar-ink); }
 
+/* ── Origin postcard card (Home tab) ──────────────────────────── */
+.origin-card {
+    position: relative;
+    border-radius: 20px;
+    overflow: hidden;
+    min-height: 200px;
+    background-size: cover;
+    background-position: center;
+    background-color: #0d1e30;
+    border: 1px solid rgba(45,212,191,.25);
+    box-shadow: 0 18px 44px rgba(0,0,0,.4);
+    margin: 4px 0 18px;
+    display: flex;
+    align-items: center;
+}
+.origin-card-inner {
+    padding: 26px 30px;
+    width: 100%;
+}
+.origin-card-kicker {
+    color: var(--radar-teal);
+    font-size: .8rem;
+    font-weight: 800;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+}
+.origin-card-code {
+    color: #ffffff;
+    font-size: 3rem;
+    font-weight: 950;
+    line-height: 1;
+    letter-spacing: .02em;
+    text-shadow: 0 2px 18px rgba(0,0,0,.55);
+}
+.origin-card-city {
+    color: var(--radar-ink);
+    font-size: 1.5rem;
+    font-weight: 800;
+    margin-top: 4px;
+    text-shadow: 0 1px 10px rgba(0,0,0,.5);
+}
+.origin-card-country {
+    color: var(--radar-blue);
+    font-size: .95rem;
+    font-weight: 600;
+    margin-top: 2px;
+}
+.origin-card-postcard {
+    color: #d7e3f4;
+    font-size: .85rem;
+    margin-top: 12px;
+    opacity: .9;
+}
+
 /* ── Login screen ─────────────────────────────────────────────── */
 .login-page {
     position: fixed;

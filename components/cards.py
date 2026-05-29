@@ -8,6 +8,47 @@ import streamlit as st
 from services.miles_service import format_miles
 
 
+def render_origin_card(
+    iata: str,
+    city: str,
+    country: str = "",
+    image_url: str = "",
+    gradient: str = "",
+    postcard_label: str = "",
+) -> None:
+    """Hero card shown at the top of the Home tab once the user picks an origin.
+    Displays the airport code, the city name and the destination postcard image."""
+    iata = (iata or "").upper().strip()
+    city = city or iata
+    grad = gradient or "linear-gradient(135deg,#0d3b2e,#07263a)"
+    if image_url:
+        bg = (
+            f"linear-gradient(100deg,rgba(8,17,31,.92) 0%,rgba(8,17,31,.62) 48%,"
+            f"rgba(8,17,31,.18) 100%), url({image_url}), {grad}"
+        )
+    else:
+        bg = f"linear-gradient(100deg,rgba(8,17,31,.86) 0%,rgba(8,17,31,.4) 100%), {grad}"
+
+    country_html = f'<div class="origin-card-country">{country}</div>' if country else ""
+    label_html = (
+        f'<div class="origin-card-postcard">📍 {postcard_label}</div>' if postcard_label else ""
+    )
+
+    st.markdown(
+        f"<style>#origin-hero{{background-image:{bg};}}</style>"
+        f'<div id="origin-hero" class="origin-card">'
+        f'<div class="origin-card-inner">'
+        f'<div class="origin-card-kicker">🛫 Origem selecionada</div>'
+        f'<div class="origin-card-code">{iata}</div>'
+        f'<div class="origin-card-city">{city}</div>'
+        f'{country_html}'
+        f'{label_html}'
+        f'</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
 # ─── classification → visual mapping ─────────────────────────────────────────
 
 _CLASSIFICATION_CSS: dict[str, str] = {

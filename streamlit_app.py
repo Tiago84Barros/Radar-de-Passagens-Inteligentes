@@ -21,8 +21,8 @@ except ImportError:
 from app.monitor import run_due_searches, run_search_once
 from app.settings import get_settings
 from app.styles import load_custom_css
-from components.cards import render_airline_comparison, render_deal_cards_section
-from data.destinations_catalog import BRAZIL_IATAS
+from components.cards import render_airline_comparison, render_deal_cards_section, render_origin_card
+from data.destinations_catalog import BRAZIL_IATAS, get_destination_info
 from providers.travelpayouts_provider import TravelPayoutsProvider, TravelPayoutsProviderError
 from services.air_network import find_candidate_hubs, hub_route_label
 from services.github_actions_service import is_configured as github_trigger_configured, trigger_monitor
@@ -516,6 +516,16 @@ def render_sidebar(summary: dict, provider_status: dict[str, Any], db_connected:
         origin_input, selected_origin = _render_location_picker("Origem", "origin")
         destination_input, selected_destination = _render_location_picker("Destino", "destination")
 
+        # Make the chosen origin available to the Home tab immediately (before
+        # submitting the search) so it can render the origin postcard card.
+        if selected_origin is not None:
+            st.session_state["home_origin"] = {
+                "code": selected_origin.code,
+                "label": selected_origin.label,
+            }
+        elif not origin_input:
+            st.session_state.pop("home_origin", None)
+
         with st.form("new_search_form", clear_on_submit=False):
             departure = st.date_input("Data de ida", value=None, format="DD/MM/YYYY")
             trip_label = st.selectbox("Tipo de viagem", list(TRIP_TYPE_OPTIONS.keys()), index=1)
@@ -736,55 +746,49 @@ def render_home_metrics(summary: dict, df: pd.DataFrame) -> None:
     )
 
 
+def _clean_city_from_label(label: str, code: str) -> str:
+    """Extract a readable city name from a LocationResolution label.
+
+    Labels look like 'Belém, Brasil (BEL)' — we want just 'Belém'.
+    """
+    text = (label or "").strip()
+    if not text:
+        return code
+    # Drop a trailing ' (XXX)' airport code
+    if "(" in text:
+        text = text.split("(", 1)[0].strip()
+    # Keep only the city part (before the first comma)
+    if "," in text:
+        text = text.split(",", 1)[0].strip()
+    return text or code
+
+
+def render_home_origin_card() -> None:
+    """Render the origin postcard card at the top of the Home tab when the user
+    has chosen an origin in the sidebar. Shows IATA code, city and postcard image."""
+    origin = st.session_state.get("home_origin")
+    if not origin:
+        return
+    code = str(origin.get("code") or "").upper()
+    if not code:
+        return
+    info = get_destination_info(code)
+    catalog_city = info.get("city") or ""
+    city = catalog_city if catalog_city and catalog_city.upper() != code else _clean_city_from_label(origin.get("label", ""), code)
+    render_origin_card(
+        iata=code,
+        city=city,
+        country=info.get("country", ""),
+        image_url=info.get("image_url", ""),
+        gradient=info.get("gradient", ""),
+        postcard_label=info.get("postcard_label", ""),
+    )
+
+
 def render_home_tab(summary: dict, df_quotes: pd.DataFrame, provider_status: dict) -> None:
-    """Main home screen: metrics + national deals + international deals."""
-    render_home_metrics(summary, df_quotes)
-
-    # ── Malha aérea expandida info bar ────────────────────────────────────
-    st.markdown(
-        '<div class="malha-banner">'
-        '<span class="malha-banner-icon">🔗</span>'
-        '<span>'
-        '<strong>Busca via malha aérea expandida</strong> — o radar pesquisa automaticamente '
-        'rotas diretas <em>e</em> combinadas através dos hubs brasileiros (GRU, BSB, GIG e outros), '
-        'encontrando a combinação de trechos mais barata para o seu destino.'
-        '</span>'
-        '</div>',
-        unsafe_allow_html=True,
-    )
-    st.write("")
-
-    # ── Per-airline comparison for the last searched route ────────────────
-    last_ctx = st.session_state.get("last_route_context") or {}
-    cmp_origin = str(last_ctx.get("origin_code") or "")
-    cmp_dest = str(last_ctx.get("destination_code") or "")
-    if cmp_origin and cmp_dest:
-        comparison = get_airline_comparison(
-            df_quotes, cmp_origin, cmp_dest, cents_per_mile=DEFAULT_CENTS_PER_MILE
-        )
-        if comparison:
-            route_label = f"{last_ctx.get('origin_label', cmp_origin)} → {last_ctx.get('destination_label', cmp_dest)}"
-            render_airline_comparison(comparison, route_label=route_label)
-
-    with st.spinner("Carregando oportunidades..."):
-        # fill_demo=False → só dados reais coletados; gaps viram "Dados Ausentes"
-        national_deals, intl_deals = get_home_deals(
-            df_quotes, cents_per_mile=DEFAULT_CENTS_PER_MILE, fill_demo=False
-        )
-
-    render_deal_cards_section(
-        title="✈️ Passagens baratas pelo Brasil",
-        subtitle="Melhores oportunidades nacionais — diretas e via conexões.",
-        deals=national_deals,
-        per_row=3,
-    )
-
-    render_deal_cards_section(
-        title="🌎 Passagens baratas para o exterior",
-        subtitle="Melhores oportunidades internacionais — diretas e via conexões.",
-        deals=intl_deals,
-        per_row=3,
-    )
+    """Home screen. Starts empty (only the origin postcard once an origin is
+    chosen). The richer panels are being rebuilt step by step."""
+    render_home_origin_card()
 
 
 # ─── Tab: Oportunidades ───────────────────────────────────────────────────────
