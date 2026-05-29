@@ -147,6 +147,17 @@ CSS = """
     letter-spacing: .08em;
     font-weight: 850;
 }
+.metric-info {
+    display: inline-block;
+    margin-left: 5px;
+    color: var(--radar-teal);
+    cursor: help;
+    font-weight: 700;
+    opacity: .75;
+    text-transform: none;
+}
+.metric-info:hover { opacity: 1; }
+.metric-card { cursor: default; }
 .metric-value {
     color: var(--radar-ink);
     font-size: 1.65rem;

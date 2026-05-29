@@ -364,10 +364,14 @@ def render_metric_cards(values: list[tuple], per_row: int = 4) -> None:
         for col, metric in zip(cols, values[start:start + per_row]):
             label, value, help_text = metric[:3]
             indicator = metric[3] if len(metric) > 3 else "Atualizado"
+            tooltip = metric[4] if len(metric) > 4 else ""
+            info_icon = (
+                f'<span class="metric-info" title="{tooltip}">ⓘ</span>' if tooltip else ""
+            )
             col.markdown(
                 f"""
-                <div class="metric-card">
-                    <div class="metric-label">{label}</div>
+                <div class="metric-card" title="{tooltip}">
+                    <div class="metric-label">{label}{info_icon}</div>
                     <div class="metric-value">{value}</div>
                     <div class="metric-help">{help_text}</div>
                     <div class="metric-indicator">{indicator}</div>
@@ -655,12 +659,54 @@ def render_home_metrics(summary: dict, df: pd.DataFrame) -> None:
 
     render_metric_cards(
         [
-            ("Buscas ativas", metrics_base["active"], "Rotinas em monitoramento", "Online"),
-            ("Oportunidades", metrics_base["opportunities"], "Boas, ótimas e excelentes", "Score ativo"),
-            ("Menor preço nacional", money(nat_lowest) if nat_lowest else "Dados Ausentes", "Menor tarifa Brasil", "Nacional"),
-            ("Menor preço internacional", money(intl_lowest) if intl_lowest else "Dados Ausentes", "Menor tarifa exterior", "Internacional"),
-            ("Melhor em milhas", best_miles_label, "Estimativa base R$0,035/milha", "Milhas"),
-            ("Alertas enviados", metrics_base["alerts"], "Telegram / e-mail", "Histórico"),
+            (
+                "Buscas ativas",
+                metrics_base["active"],
+                "Rotas que você cadastrou e o radar monitora sozinho",
+                "Online",
+                "Quantas rotas estão em monitoramento. O monitor as verifica automaticamente "
+                "a cada 30 min (no GitHub Actions), mesmo com o app fechado, e salva os preços no banco.",
+            ),
+            (
+                "Oportunidades",
+                metrics_base["opportunities"],
+                "Cotações classificadas como Boa, Ótima ou Excelente",
+                "Score ativo",
+                "Número de cotações cujo preço, comparado ao histórico da rota, recebeu uma boa nota "
+                "(score). Quanto melhor o desconto, maior a classificação.",
+            ),
+            (
+                "Menor preço nacional",
+                money(nat_lowest) if nat_lowest else "Dados Ausentes",
+                "Voo mais barato dentro do Brasil já coletado",
+                "Nacional",
+                "Menor tarifa em reais encontrada para voos entre cidades brasileiras, considerando "
+                "todas as cotações reais salvas no banco. 'Dados Ausentes' = nenhum voo nacional coletado ainda.",
+            ),
+            (
+                "Menor preço internacional",
+                money(intl_lowest) if intl_lowest else "Dados Ausentes",
+                "Voo mais barato para o exterior já coletado",
+                "Internacional",
+                "Menor tarifa em reais encontrada para voos com destino fora do Brasil, considerando "
+                "todas as cotações reais salvas. 'Dados Ausentes' = nenhum voo internacional coletado ainda.",
+            ),
+            (
+                "Melhor em milhas",
+                best_miles_label,
+                "Estimativa de milhas do voo mais barato",
+                "Milhas",
+                "Estimativa de quantas milhas equivaleriam ao voo mais barato (preço ÷ R$ 0,035). "
+                "É um cálculo aproximado — NÃO representa disponibilidade real em Smiles, TudoAzul ou Latam Pass.",
+            ),
+            (
+                "Alertas enviados",
+                metrics_base["alerts"],
+                "Avisos de preço já disparados a você",
+                "Histórico",
+                "Quantas notificações de oportunidade já foram enviadas por Telegram/e-mail quando um "
+                "preço dentro do seu limite foi encontrado.",
+            ),
         ],
         per_row=3,
     )
