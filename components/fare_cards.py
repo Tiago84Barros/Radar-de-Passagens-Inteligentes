@@ -5,16 +5,40 @@ import streamlit as st
 from components.cards import _airline_visual, _classification_info
 from utils.formatters import (
     format_brl,
+    format_collected_age,
     format_date_br,
     format_duration_short,
     format_miles,
     format_stops,
+    quote_age_hours,
 )
 
 _TIP_MILES = (
     "Milhas estimadas (preço ÷ R$ 0,035). A disponibilidade real depende do "
     "programa de fidelidade."
 )
+
+# Quotes collected more than this many hours ago get a discreet "stale" warning
+# on the card — airfares expire fast, so old snapshots may no longer exist.
+_STALE_AFTER_HOURS = 24
+
+
+def _freshness_html(deal: dict) -> str:
+    """Build the 'collected ago' chip (and stale warning) for a fare card."""
+    age_label = format_collected_age(deal.get("collected_at"))
+    if not age_label:
+        return ""
+    hours = quote_age_hours(deal.get("collected_at"))
+    is_stale = hours is not None and hours >= _STALE_AFTER_HOURS
+    cls = "fare-card-age fare-card-age-stale" if is_stale else "fare-card-age"
+    icon = "⏳" if is_stale else "🕓"
+    chip = f'<div class="{cls}">{icon} Coletado {age_label}</div>'
+    if is_stale:
+        chip += (
+            '<div class="fare-card-note">⚠️ Preço coletado há mais de 24h — '
+            'pode ter mudado ou expirado. Confirme no site antes de comprar.</div>'
+        )
+    return chip
 
 
 def _route_html(deal: dict) -> str:
@@ -85,6 +109,7 @@ def _fare_card_html(deal: dict, is_cheapest: bool) -> str:
         f'<span class="miles-est-tag">estimadas*</span></div>'
         f'<div class="fare-card-meta">{meta_line}</div>'
         f'<div class="fare-card-foot">Score {score}/100 · {provider}</div>'
+        f'{_freshness_html(deal)}'
         f'{combined_note}'
         f'{btn}'
         f'</div>'

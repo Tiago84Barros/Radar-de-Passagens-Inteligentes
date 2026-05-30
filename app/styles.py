@@ -1095,6 +1095,19 @@ a.buy-link {
 .fare-card-miles { font-size: .9rem; color: #E5EDF8; }
 .fare-card-meta { font-size: .85rem; color: var(--radar-muted); }
 .fare-card-foot { font-size: .78rem; color: var(--radar-muted); }
+.fare-card-age {
+    align-self: flex-start;
+    font-size: .74rem;
+    font-weight: 700;
+    color: #99F6E4;
+    background: rgba(45,212,191,.12);
+    padding: 3px 9px;
+    border-radius: 999px;
+}
+.fare-card-age-stale {
+    color: #FBBF24;
+    background: rgba(251,191,36,.12);
+}
 .fare-card-note {
     font-size: .8rem;
     color: #FBBF24;

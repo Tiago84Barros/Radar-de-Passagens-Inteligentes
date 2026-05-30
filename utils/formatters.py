@@ -12,6 +12,8 @@ __all__ = [
     "format_date_br",
     "format_duration_short",
     "format_stops",
+    "quote_age_hours",
+    "format_collected_age",
 ]
 
 
@@ -59,3 +61,38 @@ def format_stops(stops) -> str:
     if n == 1:
         return "1 conexão"
     return f"{n} conexões"
+
+
+def quote_age_hours(collected_at) -> float | None:
+    """Age of a quote, in hours, based on when it was collected.
+
+    Returns None when the timestamp is missing/unparseable. Airfares expire fast,
+    so callers use this to flag or hide stale snapshots."""
+    if collected_at is None:
+        return None
+    import pandas as pd
+
+    ts = pd.to_datetime(collected_at, errors="coerce", utc=True)
+    if ts is None or pd.isna(ts):
+        return None
+    delta = pd.Timestamp.now(tz="UTC") - ts
+    hours = delta.total_seconds() / 3600.0
+    return hours if hours >= 0 else 0.0
+
+
+def format_collected_age(collected_at) -> str:
+    """Human 'collected ago' label: 'agora há pouco', 'há 2 h', 'há 3 dias'.
+
+    Returns '' when the timestamp is missing so callers can omit the chip."""
+    hours = quote_age_hours(collected_at)
+    if hours is None:
+        return ""
+    minutes = hours * 60
+    if minutes < 5:
+        return "agora há pouco"
+    if minutes < 60:
+        return f"há {int(round(minutes))} min"
+    if hours < 24:
+        return f"há {int(round(hours))} h"
+    days = int(hours // 24)
+    return "há 1 dia" if days == 1 else f"há {days} dias"

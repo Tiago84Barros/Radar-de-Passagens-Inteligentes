@@ -68,6 +68,16 @@ OPPORTUNITY_LABELS = {
 
 NON_REAL_SOURCE_MARKERS = ("mock", "demo", "fallback", "demonstracao", "demonstra")
 
+# Freshness window for the Home fare cards. Airfares expire fast, so by default
+# the Home tab only shows fares collected in the last 48h; the user can widen it.
+FARE_WINDOW_OPTIONS: dict[str, float | None] = {
+    "24h": 24.0,
+    "48h": 48.0,
+    "7 dias": 168.0,
+    "Todas": None,
+}
+FARE_WINDOW_DEFAULT_INDEX = 1  # "48h"
+
 
 # ─── Auth ─────────────────────────────────────────────────────────────────────
 
@@ -855,14 +865,41 @@ def render_home_tab(summary: dict, df_quotes: pd.DataFrame, provider_status: dic
         str(last_ctx.get("origin_code") or "").upper() == origin_code
         and str(last_ctx.get("destination_code") or "").upper() == dest_code
     )
-    deals = get_airline_comparison(df_quotes, origin_code, dest_code)
+    # Any quote ever collected for this route (ignores freshness) — used only to
+    # decide between the "click Buscar agora" hint and the fare section.
+    deals_any = get_airline_comparison(df_quotes, origin_code, dest_code)
 
     # Both chosen but no search yet and no quotes collected for the route.
-    if not searched and not deals:
+    if not searched and not deals_any:
         _empty_state("🔍 Clique em <strong>Buscar agora</strong> para consultar as melhores tarifas.")
         return
 
     st.divider()
+
+    # Validity window: airfares expire fast, so by default we only surface fares
+    # collected recently. The user can widen the window (or see everything).
+    window_label = st.radio(
+        "Mostrar tarifas coletadas nas últimas:",
+        list(FARE_WINDOW_OPTIONS.keys()),
+        index=FARE_WINDOW_DEFAULT_INDEX,
+        horizontal=True,
+        key="fare_window",
+        help="As tarifas expiram rápido. Esta janela esconde preços antigos que "
+        "podem não existir mais. O histórico completo continua na aba Histórico.",
+    )
+    max_age_hours = FARE_WINDOW_OPTIONS[window_label]
+    deals = get_airline_comparison(
+        df_quotes, origin_code, dest_code, max_age_hours=max_age_hours
+    )
+
+    # Searched (or has history) but everything is older than the chosen window.
+    if deals_any and not deals:
+        _empty_state(
+            "⏳ Nenhuma tarifa coletada nesta janela de tempo. As tarifas mais "
+            "recentes podem ter expirado — amplie a janela acima ou clique em "
+            "<strong>Buscar agora</strong> para atualizar os preços."
+        )
+        return
 
     # Best fare per airline (cheapest highlighted). Handles its own empty state.
     render_fare_cards(deals)

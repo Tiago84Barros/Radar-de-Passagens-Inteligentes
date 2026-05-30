@@ -62,6 +62,7 @@ def _df_row_to_deal(row: pd.Series) -> dict:
         "stops": row.get("escalas"),
         "duration_minutes": row.get("duração_min"),
         "via_hub": str(row.get("via_hub") or ""),
+        "collected_at": row.get("detectado_em"),
         # Destination visual fields
         "image_url": dest_info.get("image_url", ""),
         "postcard_label": dest_info.get("postcard_label", ""),
@@ -151,6 +152,7 @@ def get_airline_comparison(
     origin: str,
     destination: str,
     cents_per_mile: float = DEFAULT_CENTS_PER_MILE,
+    max_age_hours: float | None = None,
 ) -> list[dict]:
     """
     Return the cheapest deal per airline for a specific route, sorted
@@ -158,6 +160,11 @@ def get_airline_comparison(
 
     Used by the home-screen airline comparison card. Returns [] when there
     are no quotes for the route yet.
+
+    ``max_age_hours`` discards stale snapshots: airfares expire fast, so a price
+    collected long ago may no longer exist. When given, only quotes collected
+    within that many hours are considered. ``None`` keeps every quote (the full
+    history is still available in the History tab).
     """
     if df_quotes.empty or "preço" not in df_quotes.columns:
         return []
@@ -172,6 +179,14 @@ def get_airline_comparison(
     ]
     if route.empty:
         return []
+
+    # Drop stale snapshots (fares expire) when a freshness window is requested.
+    if max_age_hours is not None and "detectado_em" in route.columns:
+        collected = pd.to_datetime(route["detectado_em"], errors="coerce", utc=True)
+        cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(hours=max_age_hours)
+        route = route[collected.notna() & (collected >= cutoff)]
+        if route.empty:
+            return []
 
     # Keep only future or undated quotes
     if "ida" in route.columns:
