@@ -61,6 +61,11 @@ class FlightQuote(Base):
     raw_payload: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
     collected_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # True only for the latest snapshot of a concrete flight (same origin,
+    # destination, dates, airline and provider). Older snapshots are flipped to
+    # False on each new save so the "current price" is unambiguous while the full
+    # price history is preserved.
+    is_current: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("TRUE"), index=True)
 
 
 class AlertLog(Base):
@@ -166,6 +171,7 @@ def ensure_schema() -> None:
         "flight_quotes": {
             "raw_payload": "TEXT",
             "collected_at": "TIMESTAMP",
+            "is_current": "BOOLEAN DEFAULT TRUE",
         },
         "alert_logs": {
             "sent_at": "TIMESTAMP",

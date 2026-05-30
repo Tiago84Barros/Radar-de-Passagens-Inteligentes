@@ -338,6 +338,7 @@ def quotes_df(quotes: list[FlightQuote], searches: list[FlightSearch], alerts_by
                 "oportunidade": quote.opportunity,
                 "classificação": OPPORTUNITY_LABELS.get(quote.opportunity, quote.opportunity),
                 "detectado_em": quote.collected_at or quote.detected_at,
+                "is_current": bool(getattr(quote, "is_current", True)),
                 "link": quote.booking_link,
                 "alerta": alerts_by_quote.get(quote.id, "-"),
             }

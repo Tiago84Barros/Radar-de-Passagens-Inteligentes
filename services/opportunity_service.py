@@ -165,6 +165,11 @@ def get_airline_comparison(
     collected long ago may no longer exist. When given, only quotes collected
     within that many hours are considered. ``None`` keeps every quote (the full
     history is still available in the History tab).
+
+    Within the route, only the most recent snapshot of each concrete flight
+    (same dates, airline and provider) is considered, so an old cheaper price
+    never beats the current (possibly higher) one. The ``is_current`` flag set on
+    save makes this unambiguous; the recency de-dup also covers backfilled rows.
     """
     if df_quotes.empty or "preço" not in df_quotes.columns:
         return []
@@ -179,6 +184,12 @@ def get_airline_comparison(
     ]
     if route.empty:
         return []
+
+    # Prefer rows flagged as the current snapshot when that information exists.
+    if "is_current" in route.columns:
+        current = route[route["is_current"].fillna(True).astype(bool)]
+        if not current.empty:
+            route = current
 
     # Drop stale snapshots (fares expire) when a freshness window is requested.
     if max_age_hours is not None and "detectado_em" in route.columns:
@@ -195,6 +206,17 @@ def get_airline_comparison(
         route = route[route["_dep_dt"].isna() | (route["_dep_dt"] >= today)]
     if route.empty:
         return []
+
+    # Keep only the latest snapshot per concrete flight so a superseded (older)
+    # price can never win the "cheapest" comparison below.
+    if "detectado_em" in route.columns:
+        route["_collected"] = pd.to_datetime(route["detectado_em"], errors="coerce", utc=True)
+        key_cols = [c for c in ("ida", "volta", "companhia", "provedor", "via_hub") if c in route.columns]
+        if key_cols:
+            route = (
+                route.sort_values("_collected")
+                .drop_duplicates(subset=key_cols, keep="last")
+            )
 
     # Normalize airline label so "" / NaN don't collapse into one bogus group
     route["_airline"] = route["companhia"].fillna("").astype(str).str.strip()

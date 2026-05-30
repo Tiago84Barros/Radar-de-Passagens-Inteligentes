@@ -4,7 +4,7 @@ import json
 from datetime import date, datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.db import FlightQuote, FlightSearch, ProviderLog, SourceLog
 
@@ -25,22 +25,48 @@ def quote_history(db, search: FlightSearch, offer: dict[str, Any], limit: int = 
 
 
 def save_quote(db, search: FlightSearch, offer: dict[str, Any], opportunity: str) -> FlightQuote:
+    origin = offer["origin"]
+    destination = offer["destination"]
+    departure_date = _parse_date(offer["departure_date"])
+    return_date = _parse_date(offer.get("return_date"))
+    airline = offer.get("airline") or ""
+    provider = offer.get("provider") or offer.get("source") or "unknown"
+
+    # Airfares expire and re-price: a new snapshot of the same concrete flight
+    # (same route, dates, airline and provider) supersedes the previous one.
+    # Flip older snapshots to is_current=False so exactly one row stays "current"
+    # while the full price history is preserved for the History tab.
+    db.execute(
+        update(FlightQuote)
+        .where(
+            FlightQuote.origin == origin,
+            FlightQuote.destination == destination,
+            FlightQuote.departure_date == departure_date,
+            FlightQuote.return_date == return_date,
+            FlightQuote.airline == airline,
+            FlightQuote.provider == provider,
+            FlightQuote.is_current.is_(True),
+        )
+        .values(is_current=False)
+    )
+
     quote = FlightQuote(
         search_id=search.id,
-        origin=offer["origin"],
-        destination=offer["destination"],
-        departure_date=_parse_date(offer["departure_date"]),
-        return_date=_parse_date(offer.get("return_date")),
-        airline=offer.get("airline") or "",
+        origin=origin,
+        destination=destination,
+        departure_date=departure_date,
+        return_date=return_date,
+        airline=airline,
         price=offer["price"],
         currency=offer.get("currency") or search.currency,
         duration_minutes=int(offer.get("duration_minutes") or 0),
         stops=int(offer.get("stops") or 0),
         booking_link=offer.get("booking_link") or "",
-        provider=offer.get("provider") or offer.get("source") or "unknown",
+        provider=provider,
         opportunity=opportunity,
         raw_payload=json.dumps(offer.get("raw_payload", {}), ensure_ascii=False),
         collected_at=datetime.now(timezone.utc),
+        is_current=True,
     )
     db.add(quote)
     db.flush()
