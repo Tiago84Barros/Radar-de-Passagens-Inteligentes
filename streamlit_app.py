@@ -26,11 +26,21 @@ from components.airport_cards import render_airport_cards
 from components.fare_cards import render_fare_cards
 from components.charts import render_current_prices_bar, render_future_projection
 from components.monitor_prompt import render_monitor_prompt
-from data.destinations_catalog import BRAZIL_IATAS, get_destination_info
+from components.decision_cards import (
+    render_decision_summary,
+    render_opportunity_cards,
+    render_radar_overview,
+)
+from data.destinations_catalog import BRAZIL_IATAS, DESTINATIONS, get_destination_info
+from services.decision_engine import build_purchase_recommendation
+from services.multi_destination_adapter import (
+    find_cheapest_destinations,
+    live_multi_destination_search,
+)
 from providers.travelpayouts_provider import TravelPayoutsProvider, TravelPayoutsProviderError
 from services.air_network import find_candidate_hubs, hub_route_label
 from services.github_actions_service import is_configured as github_trigger_configured, trigger_monitor
-from services.miles_service import DEFAULT_CENTS_PER_MILE, estimate_miles, format_miles
+from services.miles_service import DEFAULT_CENTS_PER_MILE, MILES_DISCLAIMER, estimate_miles, format_miles
 from services.opportunity_service import (
     get_airline_comparison,
     get_best_miles_deal,
@@ -77,6 +87,22 @@ FARE_WINDOW_OPTIONS: dict[str, float | None] = {
     "Todas": None,
 }
 FARE_WINDOW_DEFAULT_INDEX = 1  # "48h"
+
+# Search strategy (sidebar "Tipo de busca").
+SEARCH_MODE_ROUTE = "Rota específica"
+SEARCH_MODE_MULTI = "Encontrar destinos mais baratos"
+
+# Scope filter for the multi-destination mode.
+SCOPE_OPTIONS = {"Ambos": "ambos", "Brasil": "nacional", "Exterior": "internacional"}
+
+# Flexible travel window (multi-destination mode): label → days ahead.
+TRAVEL_WINDOW_OPTIONS = {
+    "Próximos 30 dias": 30,
+    "Próximos 60 dias": 60,
+    "Próximos 90 dias": 90,
+    "Próximos 180 dias": 180,
+    "Próximo ano": 365,
+}
 
 
 # ─── Auth ─────────────────────────────────────────────────────────────────────
@@ -504,6 +530,102 @@ def render_header(provider_status: dict[str, Any], latest_provider_log: Provider
     )
 
 
+# ─── Multi-destination search ─────────────────────────────────────────────────
+
+def _candidate_destinations(origin_code: str, scope: str, limit_per_cat: int = 10) -> list[str]:
+    """Candidate destination IATAs from the catalog, filtered by scope and origin."""
+    wanted = {
+        "nacional": {"national"},
+        "internacional": {"international"},
+        "ambos": {"national", "international"},
+    }.get(scope, {"national", "international"})
+    nat, intl = [], []
+    for iata, info in DESTINATIONS.items():
+        if iata == origin_code:
+            continue
+        cat = info.get("category")
+        if cat not in wanted:
+            continue
+        (nat if cat == "national" else intl).append(iata)
+    return nat[:limit_per_cat] + intl[:limit_per_cat]
+
+
+def _run_multi_destination_search(
+    origin_location,
+    *,
+    scope: str,
+    window_days: int,
+    max_price: float,
+    currency: str,
+    consider_miles: bool,
+    min_mile_value: float,
+    start_monitoring: bool,
+) -> None:
+    """Run the preserved per-route engine across many destinations (live sweep)
+    and store ranked opportunities for the Home tab. Reuses
+    ``services.multi_destination_adapter.live_multi_destination_search``."""
+    origin_code = origin_location.code
+    departure = date.today() + timedelta(days=min(window_days, 60))
+    params = {
+        "departure_date": departure,
+        "return_date": None,
+        "currency": currency,
+        "max_price": max_price,
+        "consider_miles": consider_miles,
+        "user_min_mile_value": min_mile_value,
+        "adults": 1,
+    }
+    candidates = _candidate_destinations(origin_code, scope)
+    opportunities = live_multi_destination_search(
+        origin_code, candidates, params, max_destinations=12, min_mile_value=min_mile_value
+    )
+
+    # Register a multi-destination monitor entry (destination = ANYWHERE) so the
+    # search shows up in "Buscas ativas" and the scheduled monitor can refresh it.
+    try:
+        with session_scope() as db:
+            db.add(
+                FlightSearch(
+                    owner_email="demo@radar.local",
+                    origin=origin_code,
+                    destination="ANYWHERE",
+                    departure_date=departure,
+                    return_date=None,
+                    adults=1,
+                    passengers=1,
+                    max_price=float(max_price),
+                    currency=currency,
+                    trip_type="one_way",
+                    frequency_minutes=60,
+                    is_active=bool(start_monitoring),
+                )
+            )
+    except Exception:
+        pass
+
+    national = [o for o in opportunities if o["destination_type"] == "national"]
+    international = [o for o in opportunities if o["destination_type"] == "international"]
+    st.session_state["multi_results"] = {
+        "national": national,
+        "international": international,
+    }
+    st.session_state["multi_context"] = {
+        "origin_code": origin_code,
+        "origin_label": origin_location.label,
+        "scope": scope,
+        "window_days": window_days,
+        "consider_miles": consider_miles,
+        "min_mile_value": min_mile_value,
+        "max_price": max_price,
+    }
+    found = len(opportunities)
+    verb = "Monitorando" if start_monitoring else "Encontrados"
+    st.session_state["last_search_feedback"] = {
+        "text": f"✅ {verb} {found} destino(s) a partir de {origin_code}.",
+        "level": "success",
+    }
+
+
 # ─── Sidebar ──────────────────────────────────────────────────────────────────
 
 def render_sidebar(summary: dict, provider_status: dict[str, Any], db_connected: bool) -> None:
@@ -528,8 +650,22 @@ def render_sidebar(summary: dict, provider_status: dict[str, Any], db_connected:
                 st.caption(_trig_fb["text"])
             else:
                 st.info(_trig_fb["text"])
+        # ── Estratégia de busca ────────────────────────────────────────────
+        search_mode = st.radio(
+            "Tipo de busca",
+            [SEARCH_MODE_ROUTE, SEARCH_MODE_MULTI],
+            key="search_mode",
+            help="Rota específica: compara companhias para um destino. "
+            "Encontrar destinos mais baratos: usa o motor de múltiplos destinos.",
+        )
+        is_multi = search_mode == SEARCH_MODE_MULTI
+
         origin_input, selected_origin = _render_location_picker("Origem", "origin")
-        destination_input, selected_destination = _render_location_picker("Destino", "destination")
+        # Destino só aparece no modo "Rota específica".
+        if not is_multi:
+            destination_input, selected_destination = _render_location_picker("Destino", "destination")
+        else:
+            destination_input, selected_destination = "", None
 
         # Make the chosen origin available to the Home tab immediately (before
         # submitting the search) so it can render the origin postcard card.
@@ -550,22 +686,48 @@ def render_sidebar(summary: dict, provider_status: dict[str, Any], db_connected:
             st.session_state.pop("home_destination", None)
 
         with st.form("new_search_form", clear_on_submit=False):
-            departure = st.date_input("Data de ida", value=None, format="DD/MM/YYYY")
-            trip_label = st.selectbox("Tipo de viagem", list(TRIP_TYPE_OPTIONS.keys()), index=1)
-            return_date = st.date_input(
-                "Data de volta",
-                value=None,
-                disabled=TRIP_TYPE_OPTIONS[trip_label] == "one_way",
-                format="DD/MM/YYYY",
-            )
+            if is_multi:
+                # Multiple-destination mode: flexible window + scope instead of a
+                # single destination/date.
+                travel_window_label = st.selectbox(
+                    "Janela de viagem", list(TRAVEL_WINDOW_OPTIONS.keys()), index=2
+                )
+                scope_label = st.selectbox("Destinos", list(SCOPE_OPTIONS.keys()), index=0)
+                departure = None
+                trip_label = "ida e volta"
+                return_date = None
+                flexibility = "mês inteiro"
+            else:
+                travel_window_label = None
+                scope_label = "Ambos"
+                departure = st.date_input("Data de ida", value=None, format="DD/MM/YYYY")
+                trip_label = st.selectbox("Tipo de viagem", list(TRIP_TYPE_OPTIONS.keys()), index=1)
+                return_date = st.date_input(
+                    "Data de volta",
+                    value=None,
+                    disabled=TRIP_TYPE_OPTIONS[trip_label] == "one_way",
+                    format="DD/MM/YYYY",
+                )
+                flexibility = st.selectbox("Flexibilidade de datas", list(FLEXIBILITY_OPTIONS.keys()))
+
             adults = st.number_input("Adultos", min_value=1, max_value=9, value=1)
             max_price = st.number_input("Preço máximo (R$)", min_value=100.0, value=3200.0, step=50.0)
             currency = st.selectbox("Moeda", ["BRL", "USD", "EUR"], index=0)
-            flexibility = st.selectbox("Flexibilidade de datas", list(FLEXIBILITY_OPTIONS.keys()))
             frequency_label_selected = st.selectbox("Frequência de busca", list(FREQUENCY_OPTIONS.keys()), index=1)
 
+            st.markdown("**Milhas**")
+            consider_miles = st.toggle(
+                "Considerar milhas", value=True,
+                help="Compara o custo em dinheiro com a emissão estimada em milhas.",
+            )
+            min_mile_value = st.number_input(
+                "Valor mínimo da milha (R$)",
+                min_value=0.005, max_value=0.200, value=float(DEFAULT_CENTS_PER_MILE), step=0.001,
+                format="%.3f",
+                help="Abaixo deste valor por milha, o radar prefere pagar em dinheiro. Padrão: R$ 0,035.",
+            )
+
             st.markdown("**Opções de alerta**")
-            search_miles = st.toggle("Buscar em milhas", value=False, help="Habilita busca comparativa em milhas (estimada)")
             telegram_enabled = st.toggle(
                 "Alertas via Telegram",
                 value=bool(settings.telegram_bot_token and settings.telegram_chat_id),
@@ -574,7 +736,34 @@ def render_sidebar(summary: dict, provider_status: dict[str, Any], db_connected:
             search_now = st.form_submit_button("🔍 Buscar agora", use_container_width=True)
             start_monitoring = st.form_submit_button("🛰️ Iniciar monitoramento", type="primary", use_container_width=True)
 
-        if search_now or start_monitoring:
+        # Expose the decision/miles preferences to the Home tab (read on rerun).
+        st.session_state["radar_prefs"] = {
+            "consider_miles": bool(consider_miles),
+            "min_mile_value": float(min_mile_value),
+            "max_price": float(max_price),
+            "scope": SCOPE_OPTIONS.get(scope_label, "ambos"),
+            "travel_window_days": TRAVEL_WINDOW_OPTIONS.get(travel_window_label or "", 90),
+        }
+
+        if (search_now or start_monitoring) and is_multi:
+            # ── Multiple-destination sweep (preserved engine via adapter) ──────
+            origin_location = selected_origin or _resolve_search_location(origin_input, "a origem")
+            if not origin_location:
+                st.warning("Informe a origem para buscar destinos mais baratos.")
+            else:
+                _run_multi_destination_search(
+                    origin_location,
+                    scope=SCOPE_OPTIONS.get(scope_label, "ambos"),
+                    window_days=TRAVEL_WINDOW_OPTIONS.get(travel_window_label or "", 90),
+                    max_price=float(max_price),
+                    currency=currency,
+                    consider_miles=bool(consider_miles),
+                    min_mile_value=float(min_mile_value),
+                    start_monitoring=bool(start_monitoring),
+                )
+                st.rerun()
+
+        elif search_now or start_monitoring:
             origin_location = selected_origin or _resolve_search_location(origin_input, "a origem")
             destination_location = selected_destination or _resolve_search_location(destination_input, "o destino")
             if not origin_location or not destination_location:
@@ -835,26 +1024,79 @@ def _empty_state(message: str) -> None:
     )
 
 
-def render_home_tab(summary: dict, df_quotes: pd.DataFrame, provider_status: dict) -> None:
-    """Home screen orchestration.
+def _recent_history_for_route(df_quotes: pd.DataFrame, origin: str, dest: str) -> dict:
+    """Short recent stats (min/avg) for a route — supporting evidence only.
 
-    Flow (driven by the sidebar pickers):
-      • no origin            → elegant empty state.
-      • origin only          → origin postcard + "choose destination" hint.
-      • origin + destination → both postcards. Before a search, a "click Buscar
-        agora" hint; after a search, the fare cards, price-comparison bar chart,
-        future-projection chart and the "Monitorar esta rota 24h" button.
-    """
+    Reads the existing quote history; never used as the protagonist on screen,
+    only fed to the decision engine to phrase 'X% abaixo da média recente'."""
+    if df_quotes is None or df_quotes.empty or "preço" not in df_quotes.columns:
+        return {}
+    sub = df_quotes[
+        (df_quotes["origem"].astype(str).str.upper() == origin)
+        & (df_quotes["destino"].astype(str).str.upper() == dest)
+        & (df_quotes["preço"] > 0)
+    ]
+    if sub.empty:
+        return {}
+    return {
+        "recent_min": float(sub["preço"].min()),
+        "recent_avg": float(sub["preço"].mean()),
+        "sample_size": int(len(sub)),
+    }
+
+
+def _radar_overview_metrics(summary: dict, df_quotes: pd.DataFrame, prefs: dict) -> dict:
+    """Compute the 'Radar de decisão' KPI strip from collected data."""
+    cents = float(prefs.get("min_mile_value") or DEFAULT_CENTS_PER_MILE)
+    nat_low = get_national_lowest(df_quotes)
+    intl_low = get_international_lowest(df_quotes)
+    best_miles = get_best_miles_deal(df_quotes, cents)
+
+    best_cash_val = None
+    candidates = [v for v in (nat_low, intl_low) if v]
+    if candidates:
+        best_cash_val = min(candidates)
+
+    return {
+        "best_cash": format_brl(best_cash_val) if best_cash_val else "Sem dados",
+        "best_cash_sub": "Menor preço atual coletado" if best_cash_val else "Faça uma busca",
+        "best_miles": format_miles(int(best_miles.get("estimated_miles"))) if best_miles else "Sem dados",
+        "best_miles_sub": "Estimativa do voo mais barato" if best_miles else "—",
+        "best_national": format_brl(nat_low) if nat_low else "Sem dados",
+        "best_national_sub": "Voo nacional mais barato",
+        "best_international": format_brl(intl_low) if intl_low else "Sem dados",
+        "best_international_sub": "Voo internacional mais barato",
+        "monitor": str(summary.get("active", 0)),
+        "monitor_sub": "Rotas em monitoramento 24h",
+    }
+
+
+def render_home_tab(summary: dict, df_quotes: pd.DataFrame, provider_status: dict) -> None:
+    """Home screen = radar de decisão. Two modes driven by the sidebar:
+    'Rota específica' (compare a route) and 'Encontrar destinos mais baratos'
+    (preserved multi-destination engine)."""
+    mode = st.session_state.get("search_mode", SEARCH_MODE_ROUTE)
+    prefs = st.session_state.get("radar_prefs", {})
+    if mode == SEARCH_MODE_MULTI:
+        _render_home_multi(summary, df_quotes, prefs)
+    else:
+        _render_home_route(summary, df_quotes, provider_status, prefs)
+
+
+def _render_home_route(summary: dict, df_quotes: pd.DataFrame, provider_status: dict, prefs: dict) -> None:
     origin = st.session_state.get("home_origin") or {}
     destination = st.session_state.get("home_destination") or {}
     origin_code = str(origin.get("code") or "").upper()
     dest_code = str(destination.get("code") or "").upper()
 
+    consider_miles = bool(prefs.get("consider_miles", True))
+    min_mile_value = float(prefs.get("min_mile_value") or DEFAULT_CENTS_PER_MILE)
+    max_price = prefs.get("max_price")
+
     if not origin_code:
-        _empty_state("🧭 Escolha uma origem e um destino na lateral para iniciar o radar.")
+        _empty_state("🧭 Escolha uma origem e uma estratégia de busca na lateral.")
         return
 
-    # Origin (and destination, if chosen) postcards.
     render_airport_cards(origin_code, dest_code or None)
 
     if not dest_code:
@@ -866,61 +1108,144 @@ def render_home_tab(summary: dict, df_quotes: pd.DataFrame, provider_status: dic
         str(last_ctx.get("origin_code") or "").upper() == origin_code
         and str(last_ctx.get("destination_code") or "").upper() == dest_code
     )
-    # Any quote ever collected for this route (ignores freshness) — used only to
-    # decide between the "click Buscar agora" hint and the fare section.
     deals_any = get_airline_comparison(df_quotes, origin_code, dest_code)
 
-    # Both chosen but no search yet and no quotes collected for the route.
     if not searched and not deals_any:
         _empty_state("🔍 Clique em <strong>Buscar agora</strong> para consultar as melhores tarifas.")
         return
 
     st.divider()
 
-    # Validity window: airfares expire fast, so by default we only surface fares
-    # collected recently. The user can widen the window (or see everything).
+    # Validity window: airfares expire fast, so we only surface recent fares.
     window_label = st.radio(
         "Mostrar tarifas coletadas nas últimas:",
         list(FARE_WINDOW_OPTIONS.keys()),
         index=FARE_WINDOW_DEFAULT_INDEX,
         horizontal=True,
         key="fare_window",
-        help="As tarifas expiram rápido. Esta janela esconde preços antigos que "
-        "podem não existir mais. O histórico completo continua na aba Histórico.",
+        help="As tarifas expiram rápido. Esta janela esconde preços antigos. "
+        "O histórico completo fica na aba Histórico técnico.",
     )
-    max_age_hours = FARE_WINDOW_OPTIONS[window_label]
     deals = get_airline_comparison(
-        df_quotes, origin_code, dest_code, max_age_hours=max_age_hours
+        df_quotes, origin_code, dest_code, max_age_hours=FARE_WINDOW_OPTIONS[window_label]
     )
 
-    # Searched (or has history) but everything is older than the chosen window.
     if deals_any and not deals:
         _empty_state(
             "⏳ Nenhuma tarifa coletada nesta janela de tempo. As tarifas mais "
-            "recentes podem ter expirado — amplie a janela acima ou clique em "
+            "recentes podem ter expirado — amplie a janela ou clique em "
             "<strong>Buscar agora</strong> para atualizar os preços."
         )
         return
 
-    # Best fare per airline (cheapest highlighted). Handles its own empty state.
+    # ── Decision: the protagonist of the screen ───────────────────────────────
+    recent = _recent_history_for_route(df_quotes, origin_code, dest_code)
+    rec = build_purchase_recommendation(
+        deals,
+        {
+            "max_price": max_price,
+            "consider_miles": consider_miles,
+            "user_min_mile_value": min_mile_value,
+            "departure_date": last_ctx.get("departure_date"),
+        },
+        recent_history=recent,
+    )
+    render_decision_summary(rec, consider_miles=consider_miles)
+
+    # Per-airline fares (supporting detail).
+    st.divider()
     render_fare_cards(deals)
 
     if deals:
         st.divider()
         render_current_prices_bar(deals)
 
-    # Future 12-month projection (real data when available, else a clearly
-    # marked simulation seeded from the cheapest current fare).
-    base_price = None
-    if deals:
-        prices = [float(d.get("price_brl") or 0) for d in deals if (d.get("price_brl") or 0) > 0]
-        base_price = min(prices) if prices else None
-    st.divider()
-    render_future_projection(df_quotes, origin_code, dest_code, base_price)
-
     # "Monitorar esta rota 24h" with keep/replace/cancel conflict handling.
     st.divider()
     render_monitor_prompt(_home_route_dict(origin_code, dest_code, last_ctx))
+
+
+def _render_home_multi(summary: dict, df_quotes: pd.DataFrame, prefs: dict) -> None:
+    origin = st.session_state.get("home_origin") or {}
+    origin_code = str(origin.get("code") or "").upper()
+    scope = prefs.get("scope", "ambos")
+    min_mile_value = float(prefs.get("min_mile_value") or DEFAULT_CENTS_PER_MILE)
+    max_price = prefs.get("max_price")
+
+    # Global decision radar overview (answers melhor preço / destino / milhas).
+    render_radar_overview(_radar_overview_metrics(summary, df_quotes, prefs))
+    st.divider()
+
+    if not origin_code:
+        _empty_state("🧭 Escolha uma origem na lateral e clique em <strong>Buscar agora</strong> "
+                     "para encontrar os destinos mais baratos.")
+        return
+
+    render_airport_cards(origin_code, None)
+
+    results = st.session_state.get("multi_results")
+    ctx = st.session_state.get("multi_context") or {}
+    same_origin = str(ctx.get("origin_code") or "").upper() == origin_code
+
+    # Fall back to ranking the DB-collected destinations when there's no live
+    # sweep yet (preserved get_home_deals engine via the adapter).
+    if not (results and same_origin):
+        ranked = find_cheapest_destinations(
+            df_quotes, origin=origin_code, scope=scope, limit=6, fill_demo=True,
+            search_params={"max_price": max_price, "consider_miles": prefs.get("consider_miles", True),
+                           "user_min_mile_value": min_mile_value},
+            min_mile_value=min_mile_value,
+        )
+        results = {"national": ranked.get("national", []), "international": ranked.get("international", [])}
+        if not any(results.values()):
+            _empty_state("🔍 Clique em <strong>Buscar agora</strong> para varrer os destinos "
+                         "mais baratos a partir desta origem.")
+            return
+        st.caption("Mostrando destinos mais baratos já coletados. Clique em Buscar agora para uma varredura ao vivo.")
+
+    st.markdown('<div class="deals-section-header">🧳 Destinos mais baratos encontrados</div>',
+                unsafe_allow_html=True)
+
+    if scope in {"ambos", "nacional"}:
+        render_opportunity_cards(
+            results.get("national", []), title="🇧🇷 Brasil",
+            key_prefix="multi_nat", on_monitor=_monitor_destination,
+        )
+    if scope in {"ambos", "internacional"}:
+        render_opportunity_cards(
+            results.get("international", []), title="🌎 Exterior",
+            key_prefix="multi_intl", on_monitor=_monitor_destination,
+        )
+    st.caption(f"ℹ️ {MILES_DISCLAIMER}")
+
+
+def _monitor_destination(opp: dict) -> None:
+    """Persist a 'Monitorar este destino' click as an active search."""
+    try:
+        with session_scope() as db:
+            db.add(
+                FlightSearch(
+                    owner_email="demo@radar.local",
+                    origin=str(opp.get("origin_iata") or "").upper(),
+                    destination=str(opp.get("destination_iata") or "").upper(),
+                    departure_date=opp.get("departure_date") or (date.today() + timedelta(days=45)),
+                    return_date=opp.get("return_date"),
+                    adults=1,
+                    passengers=1,
+                    max_price=float(opp.get("cash_price") or 3200.0),
+                    currency="BRL",
+                    trip_type="one_way",
+                    frequency_minutes=60,
+                    is_active=True,
+                )
+            )
+        st.session_state["last_search_feedback"] = {
+            "text": f"🛰️ Monitorando {opp.get('origin_iata')} → {opp.get('destination_iata')} 24h.",
+            "level": "success",
+        }
+    except Exception as exc:  # pragma: no cover
+        st.session_state["last_search_feedback"] = {"text": f"Erro ao monitorar: {exc}", "level": "warning"}
+    st.rerun()
 
 
 # ─── Tab: Oportunidades ───────────────────────────────────────────────────────
@@ -1329,7 +1654,7 @@ def main() -> None:
         tab_history,
         tab_miles,
         tab_settings,
-    ) = st.tabs(["🏠 Início", "🎯 Oportunidades", "🛰️ Buscas Ativas", "📈 Histórico", "🏆 Milhas", "⚙️ Configurações"])
+    ) = st.tabs(["🏠 Início", "🎯 Oportunidades", "🛰️ Buscas Ativas", "📈 Histórico técnico", "🏆 Milhas", "⚙️ Configurações"])
 
     with tab_home:
         render_home_tab(summary, real_df_quotes, provider_status)

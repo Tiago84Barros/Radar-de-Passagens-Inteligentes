@@ -1142,6 +1142,90 @@ a.buy-link {
     line-height: 1.5;
 }
 
+/* ── Decision radar: recommendation hero ─────────────────────── */
+.decision-hero {
+    margin: 18px 0 14px 0;
+    padding: 22px 24px;
+    border-radius: var(--radar-card-radius);
+    background: rgba(20,32,50,.72);
+    border: 1px solid rgba(148,163,184,.16);
+    border-left: 6px solid var(--radar-teal);
+    box-shadow: 0 10px 28px rgba(3,8,18,.4);
+}
+.decision-buy     { border-left-color: #34D399; }
+.decision-miles   { border-left-color: #FBBF24; }
+.decision-monitor { border-left-color: #60A5FA; }
+.decision-cash    { border-left-color: #34D399; }
+.decision-wait    { border-left-color: #94A3B8; }
+.decision-hero-top { display: flex; justify-content: space-between; align-items: center; }
+.decision-hero-kicker {
+    text-transform: uppercase; letter-spacing: .08em; font-size: .76rem;
+    font-weight: 800; color: var(--radar-muted);
+}
+.decision-hero-confidence {
+    font-size: .78rem; font-weight: 800; color: var(--radar-teal);
+    background: var(--radar-teal-soft); padding: 3px 10px; border-radius: 999px;
+}
+.decision-hero-verdict { font-size: 2rem; font-weight: 900; color: var(--radar-ink); margin: 6px 0 2px; }
+.decision-hero-reason { font-size: 1.02rem; color: var(--radar-ink); margin-bottom: 6px; }
+.decision-hero-reasons { margin: 0; padding-left: 18px; color: var(--radar-muted); font-size: .9rem; }
+.decision-hero-reasons li { margin: 2px 0; }
+
+/* ── Best-option cards (cash / miles) ────────────────────────── */
+.option-card {
+    padding: 16px 18px; border-radius: 14px; height: 100%;
+    background: rgba(20,32,50,.66); border: 1px solid rgba(148,163,184,.16);
+}
+.option-miles { border-color: rgba(251,191,36,.34); }
+.option-cash  { border-color: rgba(52,211,153,.30); }
+.option-card-title { font-size: .88rem; font-weight: 800; color: var(--radar-muted); }
+.option-card-value { font-size: 1.8rem; font-weight: 900; color: var(--radar-ink); margin: 4px 0; }
+.option-card-sub { font-size: .9rem; color: var(--radar-teal); }
+.option-card-meta { font-size: .82rem; color: var(--radar-muted); margin-top: 4px; }
+.option-empty { opacity: .7; }
+.option-card-empty { color: var(--radar-muted); font-size: .95rem; margin-top: 6px; }
+
+/* ── Radar overview KPI strip ────────────────────────────────── */
+.radar-overview-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 6px 0 4px;
+}
+.radar-card {
+    padding: 16px 18px; border-radius: 14px;
+    background: rgba(20,32,50,.66); border: 1px solid rgba(148,163,184,.16);
+}
+.radar-rec  { border-left: 4px solid var(--radar-teal); }
+.radar-mon  { border-left: 4px solid #60A5FA; }
+.radar-miles { border-left: 4px solid #FBBF24; }
+.radar-card-label { font-size: .82rem; font-weight: 800; color: var(--radar-muted); }
+.radar-card-value { font-size: 1.5rem; font-weight: 900; color: var(--radar-ink); margin: 4px 0 2px; }
+.radar-card-sub { font-size: .8rem; color: var(--radar-muted); }
+
+/* ── Opportunity (destination) cards ─────────────────────────── */
+.opp-group-title { font-size: 1.1rem; font-weight: 800; color: var(--radar-ink); margin: 14px 0 8px; }
+.opp-card {
+    position: relative; min-height: 260px; border-radius: var(--radar-card-radius);
+    background-size: cover; background-position: center; overflow: hidden;
+    border: 1px solid rgba(148,163,184,.16); box-shadow: 0 8px 22px rgba(3,8,18,.42);
+    margin-bottom: 8px;
+}
+.opp-card-overlay { position: absolute; inset: 0; display: flex; flex-direction: column;
+    justify-content: flex-end; gap: 2px; padding: 16px 18px; }
+.opp-badge { align-self: flex-start; font-size: .72rem; font-weight: 800; padding: 3px 10px;
+    border-radius: 999px; margin-bottom: auto; backdrop-filter: blur(3px); }
+.opp-badge-buy    { background: rgba(52,211,153,.9); color: #06241f; }
+.opp-badge-miles  { background: rgba(251,191,36,.92); color: #2a1c00; }
+.opp-badge-monitor{ background: rgba(96,165,250,.9); color: #06203f; }
+.opp-badge-cash   { background: rgba(52,211,153,.9); color: #06241f; }
+.opp-badge-wait   { background: rgba(148,163,184,.85); color: #0b1422; }
+.opp-card-code { font-size: 1.5rem; font-weight: 900; color: #fff; letter-spacing: .03em; }
+.opp-demo { font-size: .6rem; font-weight: 800; background: rgba(148,163,184,.5); color: #0b1422;
+    padding: 1px 6px; border-radius: 999px; vertical-align: middle; }
+.opp-card-city { font-size: 1.05rem; font-weight: 800; color: #fff; }
+.opp-card-country { font-size: .82rem; color: rgba(248,250,252,.8); }
+.opp-card-price { font-size: 1.5rem; font-weight: 900; color: #5EEAD4; margin-top: 4px; }
+.opp-card-miles { font-size: .84rem; color: rgba(248,250,252,.85); }
+.opp-card-meta { font-size: .76rem; color: rgba(248,250,252,.7); margin-top: 2px; }
+
 /* ── Responsive ──────────────────────────────────────────────── */
 @media (max-width: 900px) {
     .top-shell { display: block; }
@@ -1154,6 +1238,7 @@ a.buy-link {
     .deal-cards-grid { grid-template-columns: 1fr !important; }
     .airline-cmp-grid { grid-template-columns: 1fr 1fr !important; }
     .fare-cards-grid { grid-template-columns: 1fr !important; }
+    .radar-overview-grid { grid-template-columns: 1fr 1fr !important; }
 }
 </style>
 """
