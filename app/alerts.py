@@ -21,6 +21,13 @@ def build_alert_message(search: FlightSearch, quote: FlightQuote, decision) -> s
     miles = estimate_miles(quote.price, DEFAULT_CENTS_PER_MILE)
     miles_label = format_miles(miles)
 
+    # Decision-based fields (spec §7): recommendation, main reason and implied
+    # mile value. These come from the decision engine via monitoring_service.
+    recommendation = getattr(decision, "recommendation", None) or decision.get("recommendation")
+    rec_reason = getattr(decision, "recommendation_reason", None) or decision.get("recommendation_reason")
+    mile_value = getattr(decision, "mile_value", None) or decision.get("mile_value") or 0.0
+    mile_value_label = f"R$ {float(mile_value):.3f}".replace(".", ",") if mile_value else "—"
+
     # Emoji for classification
     emoji_map = {
         "excelente oportunidade": "🏆",
@@ -62,14 +69,20 @@ def build_alert_message(search: FlightSearch, quote: FlightQuote, decision) -> s
     if ret_date:
         date_info += f" a {ret_date}"
 
+    rec_line = f"🧭  Recomendação: {recommendation}\n" if recommendation else ""
+    rec_reason_line = f"💡  Motivo: {rec_reason}\n" if rec_reason else ""
+
     return (
         f"{emoji} Radar de Passagens Inteligentes\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"✈️  Rota: {quote.origin} → {quote.destination}\n"
         f"📅  Datas: {date_info or 'a confirmar'}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"{rec_line}"
+        f"{rec_reason_line}"
         f"💰  Preço encontrado: {format_brl(quote.price)}\n"
         f"🏆  Milhas estimadas: {miles_label}\n"
+        f"🪙  Valor implícito da milha: {mile_value_label}\n"
         f"    ⚠️ Milhas estimadas — não representa disponibilidade real\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"🏷️  Classificação: {classification}\n"

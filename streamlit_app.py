@@ -19,6 +19,7 @@ except ImportError:
         location = resolve_location(value)
         return [location] if location else []
 from app.monitor import run_due_searches, run_search_once
+from services.database_service import save_best_deals
 from app.settings import get_settings
 from app.styles import load_custom_css
 from components.cards import render_airline_comparison, render_deal_cards_section, render_origin_card
@@ -582,6 +583,7 @@ def _run_multi_destination_search(
 
     # Register a multi-destination monitor entry (destination = ANYWHERE) so the
     # search shows up in "Buscas ativas" and the scheduled monitor can refresh it.
+    # Also persist the ranked opportunities into best_deals (new table).
     try:
         with session_scope() as db:
             db.add(
@@ -600,6 +602,7 @@ def _run_multi_destination_search(
                     is_active=bool(start_monitoring),
                 )
             )
+            save_best_deals(db, origin_code, opportunities)
     except Exception:
         pass
 

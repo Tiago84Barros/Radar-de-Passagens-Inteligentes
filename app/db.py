@@ -101,6 +101,49 @@ class SourceLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class BestDeal(Base):
+    """Snapshot of a best destination opportunity found by the multi-destination
+    sweep. Feeds the decision radar and avoids recomputing rankings on every load.
+    New table — created automatically by create_all; never replaces flight_quotes.
+    """
+    __tablename__ = "best_deals"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    search_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    origin_iata: Mapped[str] = mapped_column(String(8), index=True)
+    destination_iata: Mapped[str] = mapped_column(String(8), index=True)
+    destination_city: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    destination_country: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    destination_type: Mapped[str] = mapped_column(String(20), default="national")
+    departure_date: Mapped[Optional[datetime]] = mapped_column(Date, nullable=True)
+    return_date: Mapped[Optional[datetime]] = mapped_column(Date, nullable=True)
+    best_cash_price: Mapped[float] = mapped_column(Float, default=0.0)
+    estimated_miles: Mapped[int] = mapped_column(Integer, default=0)
+    mile_value: Mapped[float] = mapped_column(Float, default=0.0)
+    recommendation: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    score: Mapped[int] = mapped_column(Integer, default=0)
+    source: Mapped[Optional[str]] = mapped_column(String(60), nullable=True)
+    booking_link: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    found_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class UserRule(Base):
+    """Per-user decision preferences (max price, mile floor, limits). Optional —
+    the UI also keeps live prefs in session; this persists them across sessions."""
+    __tablename__ = "user_rules"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_email: Mapped[str] = mapped_column(String(255), default="demo@radar.local", index=True)
+    max_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    min_mile_value: Mapped[float] = mapped_column(Float, default=0.035)
+    max_stops: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    max_duration_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    scope: Mapped[str] = mapped_column(String(20), default="ambos")
+    consider_miles: Mapped[bool] = mapped_column(Boolean, default=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 _ENGINE: Engine | None = None
 _SESSION_LOCAL: sessionmaker[Session] | None = None
 
