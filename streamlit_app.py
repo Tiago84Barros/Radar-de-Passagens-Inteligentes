@@ -298,11 +298,25 @@ def status_badge(label: str, status: str = "neutral") -> str:
 
 # ─── Data loading ─────────────────────────────────────────────────────────────
 
+def _data_version() -> int:
+    """Monotonic token bumped whenever the user writes new quotes/searches. Used
+    as the cache key so the dashboard refreshes immediately after a search/run."""
+    return int(st.session_state.get("data_version", 0))
+
+
+def bump_data_version() -> None:
+    st.session_state["data_version"] = _data_version() + 1
+
+
 def load_summary() -> dict:
+    """Lightweight dashboard metadata (counts, searches, latest logs).
+
+    Deliberately does NOT fetch the bulk quote rows — those are loaded and shaped
+    once per window by the cached ``load_quotes_df`` so typing in the sidebar
+    autocomplete (which reruns the whole script per keystroke) stays fast."""
     with session_scope() as db:
         active = db.scalar(select(func.count()).select_from(FlightSearch).where(FlightSearch.is_active.is_(True))) or 0
         alerts = db.scalar(select(func.count()).select_from(AlertLog)) or 0
-        quotes = list(db.scalars(select(FlightQuote).order_by(FlightQuote.detected_at.desc()).limit(5000)))
         searches = list(db.scalars(select(FlightSearch).order_by(FlightSearch.created_at.desc())))
         latest_search = db.scalar(select(func.max(FlightSearch.last_checked_at)))
         latest_provider_log = db.scalar(
@@ -311,23 +325,33 @@ def load_summary() -> dict:
             .order_by(ProviderLog.created_at.desc())
             .limit(1)
         )
-        latest_alert_by_quote = {
+        routes = len({f"{search.origin}-{search.destination}" for search in searches})
+    return {
+        "active": active,
+        "alerts": alerts,
+        "searches": searches,
+        "latest_search": latest_search,
+        "latest_provider_log": latest_provider_log,
+        "routes": routes,
+    }
+
+
+@st.cache_data(ttl=90, show_spinner=False)
+def load_quotes_df(data_version: int) -> pd.DataFrame:
+    """Fetch the recent quotes and build the working DataFrame — the expensive
+    step. Cached (90s TTL, keyed by ``data_version``) so it runs at most once per
+    window instead of on every keystroke. ``bump_data_version`` forces a refresh
+    right after the user runs a search."""
+    with session_scope() as db:
+        quotes = list(db.scalars(select(FlightQuote).order_by(FlightQuote.detected_at.desc()).limit(5000)))
+        searches = list(db.scalars(select(FlightSearch)))
+        alerts_by_quote = {
             quote_id: status
             for quote_id, status in db.execute(
                 select(AlertLog.quote_id, AlertLog.status).where(AlertLog.quote_id.is_not(None))
             )
         }
-        routes = len({f"{search.origin}-{search.destination}" for search in searches})
-    return {
-        "active": active,
-        "alerts": alerts,
-        "quotes": quotes,
-        "searches": searches,
-        "latest_search": latest_search,
-        "latest_provider_log": latest_provider_log,
-        "latest_alert_by_quote": latest_alert_by_quote,
-        "routes": routes,
-    }
+    return quotes_df(quotes, searches, alerts_by_quote)
 
 
 def quotes_df(quotes: list[FlightQuote], searches: list[FlightSearch], alerts_by_quote: dict[int, str]) -> pd.DataFrame:
@@ -653,6 +677,7 @@ def _run_multi_destination_search(
         "text": f"✅ {verb} {found} destino(s) entre {len(candidates)} aeroportos no radar.",
         "level": "success",
     }
+    bump_data_version()  # refresh the cached quotes dataframe
 
 
 # ─── Sidebar ──────────────────────────────────────────────────────────────────
@@ -898,6 +923,7 @@ def render_sidebar(summary: dict, provider_status: dict[str, Any], db_connected:
                 # otherwise be wiped by st.rerun()).
                 st.session_state["last_search_feedback"] = {"text": save_msg, "level": "success"}
                 st.session_state["last_trigger_feedback"] = {"text": trigger_msg, "level": trigger_level}
+                bump_data_version()  # refresh the cached quotes dataframe
                 st.rerun()
 
         st.divider()
@@ -1628,6 +1654,7 @@ def render_search_control(summary: dict, df_quotes: pd.DataFrame) -> None:
         st.session_state["ctrl_feedback"] = {
             "level": "success" if res.get("ok") else "warning", "text": res.get("message", "Concluído."),
         }
+        bump_data_version()  # new quotes were saved — refresh the dashboard
         st.rerun()
     if b[3].button("📑 Duplicar", key="ctrl_dup", use_container_width=True):
         new_id = duplicate_search(selected_id)
@@ -2028,7 +2055,7 @@ def main() -> None:
     render_sidebar(summary, provider_status, db_connected)
     render_header(provider_status, summary.get("latest_provider_log"))
 
-    df_quotes = quotes_df(summary["quotes"], summary["searches"], summary["latest_alert_by_quote"])
+    df_quotes = load_quotes_df(_data_version())
     real_df_quotes = filter_real_quotes_df(df_quotes)
 
     (
