@@ -329,24 +329,30 @@ _NAME_TO_CODE.update({"latam": "LA", "gol": "G3", "azul": "AD"})
 
 
 def _airline_visual(airline: str) -> tuple[str, str]:
-    """Return (display_name, logo_html) for an airline name or IATA code."""
+    """Return (full_display_name, logo_html) for an airline name or IATA code.
+
+    The display name comes from data.airlines_catalog so the UI always shows the
+    full airline name (e.g. "GOL Linhas Aéreas"), while the logo still uses the
+    resolved IATA code."""
+    from data.airlines_catalog import get_airline_name
+
     raw = (airline or "").strip()
     if not raw or raw.lower() in {"não informada", "nao informada"}:
         return "Companhia não informada", '<span class="airline-logo-fallback">✈️</span>'
     if "+" in raw or "via" in raw.lower():
-        return raw, '<span class="airline-logo-fallback">🔗</span>'
+        return get_airline_name(raw), '<span class="airline-logo-fallback">🔗</span>'
 
     up = raw.upper()
     code = None
-    name = raw
     if up in _AIRLINE_DIRECTORY:
-        code, name = up, _AIRLINE_DIRECTORY[up]
+        code = up
     else:
         low = raw.lower()
         for nm, cd in _NAME_TO_CODE.items():
             if nm in low:
-                code, name = cd, _AIRLINE_DIRECTORY.get(cd, raw)
+                code = cd
                 break
+    name = get_airline_name(code or raw)
     if code:
         logo = (
             f'<img class="airline-logo" src="https://pics.avs.io/120/40/{code}.png" '
@@ -354,7 +360,7 @@ def _airline_visual(airline: str) -> tuple[str, str]:
             f'onerror="this.style.display=&#39;none&#39;">'
         )
         return name, logo
-    return raw, '<span class="airline-logo-fallback">✈️</span>'
+    return name, '<span class="airline-logo-fallback">✈️</span>'
 
 
 def _is_direct(deal: dict) -> bool:

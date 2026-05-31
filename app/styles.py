@@ -1171,6 +1171,24 @@ a.buy-link {
 .decision-hero-reasons { margin: 0; padding-left: 18px; color: var(--radar-muted); font-size: .9rem; }
 .decision-hero-reasons li { margin: 2px 0; }
 
+/* ── Resumo da busca ─────────────────────────────────────────── */
+.search-summary {
+    margin: 14px 0; padding: 18px 20px; border-radius: var(--radar-card-radius);
+    background: rgba(20,32,50,.72); border: 1px solid rgba(148,163,184,.16);
+    border-left: 6px solid var(--radar-teal);
+}
+.search-summary-buy { border-left-color: #34D399; }
+.search-summary-miles { border-left-color: #FBBF24; }
+.search-summary-monitor { border-left-color: #60A5FA; }
+.search-summary-wait { border-left-color: #94A3B8; }
+.search-summary-title { font-size: 1.1rem; font-weight: 900; color: var(--radar-ink); margin-bottom: 8px; }
+.summary-row { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0;
+    border-bottom: 1px dashed rgba(148,163,184,.12); font-size: .94rem; }
+.summary-row span { color: var(--radar-muted); }
+.summary-row b { color: var(--radar-ink); font-weight: 800; }
+.summary-airlines { margin-top: 10px; font-size: .9rem; color: var(--radar-ink); }
+.summary-airlines span { color: var(--radar-muted); }
+
 /* ── Best-option cards (cash / miles) ────────────────────────── */
 .option-card {
     padding: 16px 18px; border-radius: 14px; height: 100%;

@@ -32,7 +32,10 @@ from components.decision_cards import (
     render_decision_summary,
     render_opportunity_cards,
     render_radar_overview,
+    render_search_summary,
 )
+from components.progress import render_execution_progress
+from data.airlines_catalog import get_airline_name
 from data.destinations_catalog import BRAZIL_IATAS, DESTINATIONS, get_destination_info
 from data.geography_catalog import (
     AREA_BOTH,
@@ -389,7 +392,7 @@ def quotes_df(quotes: list[FlightQuote], searches: list[FlightSearch], alerts_by
                 "via_hub": via_hub,
                 "ida": quote.departure_date,
                 "volta": quote.return_date,
-                "companhia": quote.airline,
+                "companhia": get_airline_name(quote.airline),
                 "preço": quote.price,
                 "preço máximo": max_price,
                 "economia": economy,
@@ -476,15 +479,15 @@ def _location_option_label(location: LocationResolution) -> str:
 
 
 def _render_location_picker(label: str, key: str) -> tuple[str, LocationResolution | None]:
+    # No `help=` here on purpose: the "?" tooltip caused an unwanted floating
+    # history/hint over the Origem/Destino fields. Labels are kept clean.
     query = st.text_input(
         label,
         value="",
         key=f"{key}_query",
-        placeholder="Cidade, pais ou codigo do aeroporto",
-        help="Digite cidade, pais, aeroporto ou codigo IATA. Ex.: Belem, Orlando, Lisboa, BEL.",
+        placeholder="Cidade, país ou código do aeroporto",
     ).strip()
     if not query:
-        st.caption("Digite para ver os aeroportos e codigos disponiveis.")
         return query, None
 
     options = resolver_search_locations(query)
@@ -766,24 +769,9 @@ def render_sidebar(summary: dict, provider_status: dict[str, Any], db_connected:
                 )
                 flexibility = st.selectbox("Flexibilidade de datas", list(FLEXIBILITY_OPTIONS.keys()))
 
-            adults = st.number_input("Adultos", min_value=1, max_value=9, value=1)
             max_price = st.number_input("Preço máximo (R$)", min_value=100.0, value=3200.0, step=50.0)
             currency = st.selectbox("Moeda", ["BRL", "USD", "EUR"], index=0)
-            frequency_label_selected = st.selectbox("Frequência de busca", list(FREQUENCY_OPTIONS.keys()), index=1)
-
-            st.markdown("**Milhas**")
-            consider_miles = st.toggle(
-                "Considerar milhas", value=True,
-                help="Compara o custo em dinheiro com a emissão estimada em milhas.",
-            )
-            min_mile_value = st.number_input(
-                "Valor mínimo da milha (R$)",
-                min_value=0.005, max_value=0.200, value=float(DEFAULT_CENTS_PER_MILE), step=0.001,
-                format="%.3f",
-                help="Abaixo deste valor por milha, o radar prefere pagar em dinheiro. Padrão: R$ 0,035.",
-            )
-
-            st.markdown("**Opções de alerta**")
+            consider_miles = st.toggle("Considerar milhas", value=True)
             telegram_enabled = st.toggle(
                 "Alertas via Telegram",
                 value=bool(settings.telegram_bot_token and settings.telegram_chat_id),
@@ -791,6 +779,12 @@ def render_sidebar(summary: dict, provider_status: dict[str, Any], db_connected:
 
             search_now = st.form_submit_button("🔍 Buscar agora", use_container_width=True)
             start_monitoring = st.form_submit_button("🛰️ Iniciar monitoramento", type="primary", use_container_width=True)
+
+        # Internal defaults for fields removed from the sidebar (kept in state so
+        # the rest of the flow and the worker keep working unchanged).
+        adults = 1
+        frequency_label_selected = "1h"          # FREQUENCY_OPTIONS["1h"] == 60
+        min_mile_value = float(DEFAULT_CENTS_PER_MILE)  # 0.035
 
         # Expose the decision/miles preferences to the Home tab (read on rerun).
         st.session_state["radar_prefs"] = {
@@ -846,6 +840,9 @@ def render_sidebar(summary: dict, provider_status: dict[str, Any], db_connected:
                     "return_date": return_date if TRIP_TYPE_OPTIONS[trip_label] == "round_trip" else None,
                     "source": "Busca feita agora" if search_now else "Monitoramento iniciado",
                 }
+                # ── Busca IMEDIATA via API (não depende do GitHub Actions) ─────
+                import time as _time
+                t_start = _time.monotonic()
                 with session_scope() as db:
                     search = FlightSearch(
                         owner_email="demo@radar.local",
@@ -862,38 +859,62 @@ def render_sidebar(summary: dict, provider_status: dict[str, Any], db_connected:
                         baggage_included=False,
                         frequency_minutes=FREQUENCY_OPTIONS[frequency_label_selected],
                         is_active=bool(start_monitoring),
+                        search_type="route",
+                        telegram_enabled=bool(telegram_enabled),
+                        consider_miles=bool(consider_miles),
+                        min_mile_value=float(min_mile_value),
                     )
                     db.add(search)
                     db.flush()
-                    saved = run_search_once(db, search, include_year_calendar=True)
+                    with st.spinner("Consultando a API agora… (resultado imediato)"):
+                        saved = run_search_once(db, search, include_year_calendar=True)
+                api_seconds = _time.monotonic() - t_start
                 if start_monitoring:
-                    save_msg = f"🛰️ Monitoramento iniciado. {saved} cotação(ões) salvas."
+                    save_msg = f"🛰️ Monitoramento iniciado. Busca imediata via API salvou {saved} cotação(ões)."
                 else:
-                    save_msg = f"✅ Busca concluída. {saved} cotação(ões) salvas."
+                    save_msg = f"✅ Busca imediata via API concluída em {api_seconds:.1f}s — {saved} cotação(ões) salvas."
 
-                # Fire the scraping workflow on GitHub Actions right away so the
-                # full scraping (Google/GOL/LATAM/Azul) runs immediately instead
-                # of waiting for the next scheduled cron. The cron keeps running
-                # on its own, so monitoring continues even with the app closed.
+                # ── Execução COMPLEMENTAR no GitHub Actions/worker (mais lenta) ──
+                # Não bloqueia a interface: a busca acima já retornou. O worker faz
+                # o scraping completo e segue monitorando.
+                t_trigger = _time.monotonic()
                 trigger_msg = None
                 trigger_level = "info"
+                worker_status = "not_configured"
                 if github_trigger_configured():
                     dispatch = trigger_monitor(force=True)
                     if dispatch.ok:
+                        worker_status = "queued"
                         trigger_msg = (
-                            "🚀 " + dispatch.message + " Atualize a página em ~2-3 min "
-                            "para ver os preços por companhia (R$ e milhas)."
+                            "🚀 " + dispatch.message + " A API já trouxe os preços acima; "
+                            "o GitHub Actions roda em paralelo e pode levar alguns minutos."
                         )
                         trigger_level = "info"
                     else:
+                        worker_status = "failed"
                         trigger_msg = "⚠️ " + dispatch.message
                         trigger_level = "warning"
                 else:
                     trigger_msg = (
-                        "ℹ️ Para coletar os preços agora via scraping, configure GITHUB_TOKEN e "
-                        "GITHUB_REPO. Sem isso, o monitor agendado coleta em até 30 min."
+                        "ℹ️ Resultados imediatos vêm da API. Para o scraping complementar via "
+                        "GitHub Actions, configure GITHUB_TOKEN e GITHUB_REPO."
                     )
                     trigger_level = "caption"
+                trigger_seconds = _time.monotonic() - t_trigger
+
+                # Store the execution progress for the "Andamento da execução" panel.
+                st.session_state["search_progress"] = {
+                    "route": f"{origin_location.code.upper()} → {destination_location.code.upper()}",
+                    "origin_code": origin_location.code.upper(),
+                    "destination_code": destination_location.code.upper(),
+                    "api_seconds": round(api_seconds, 1),
+                    "trigger_seconds": round(trigger_seconds, 1),
+                    "worker_status": worker_status,
+                    "worker_estimate_seconds": 90,
+                    "saved": saved,
+                    "started_at": _time.time(),
+                    "mode": "route",
+                }
 
                 # Persist feedback across the rerun below (messages set here would
                 # otherwise be wiped by st.rerun()).
@@ -903,28 +924,9 @@ def render_sidebar(summary: dict, provider_status: dict[str, Any], db_connected:
                 st.rerun()
 
         st.divider()
-        st.subheader("📡 Status do sistema")
-        telegram_ok = bool(settings.telegram_bot_token and settings.telegram_chat_id)
-        status_rows = [
-            ("Banco conectado", "✅ Sim" if db_connected else "❌ Não"),
-            ("Provider ativo", provider_status["provider_label"]),
-            ("Travelpayouts", "✅ Ativo" if settings.travelpayouts_api_token else "⚠️ Inativo"),
-            ("Modo", "⚠️ Demonstração" if provider_status["demo_mode"] else "✅ Travelpayouts real"),
-            ("Telegram", "✅ Configurado" if telegram_ok else "⚠️ Não configurado"),
-            ("Última busca", format_datetime(summary.get("latest_search"))),
-            ("Buscas ativas", summary["active"]),
-        ]
-        latest_provider_log = summary.get("latest_provider_log")
-        if latest_provider_log:
-            status_rows.insert(3, ("Status API", latest_provider_log.status))
-        for label, value in status_rows:
-            st.markdown(
-                f'<div class="status-row"><span class="status-label">{label}</span>'
-                f'<span class="status-value">{value}</span></div>',
-                unsafe_allow_html=True,
-            )
 
-        st.divider()
+        # (O "Status do sistema" saiu da sidebar para deixá-la mais limpa — ele
+        # continua disponível na aba Configurações.)
 
         # ── Malha aérea: show candidate hubs for last search ──────────────
         last_ctx = st.session_state.get("last_route_context")
@@ -1212,6 +1214,20 @@ def _render_home_route(summary: dict, df_quotes: pd.DataFrame, provider_status: 
         },
         recent_history=recent,
     )
+
+    # Search resumo card (route, cheapest, miles, airlines found, worker status).
+    progress = st.session_state.get("search_progress")
+    if not (progress and progress.get("origin_code") == origin_code
+            and progress.get("destination_code") == dest_code):
+        progress = None
+    render_search_summary(deals, rec, route=f"{origin_code} → {dest_code}", progress=progress)
+
+    # Execution progress: immediate API vs complementary GitHub Actions worker.
+    if progress:
+        st.divider()
+        render_execution_progress(progress)
+
+    st.divider()
     render_decision_summary(rec, consider_miles=consider_miles)
 
     # Per-airline fares (supporting detail).
@@ -1673,6 +1689,7 @@ def render_search_control(summary: dict, df_quotes: pd.DataFrame) -> None:
         if rows:
             dfres = pd.DataFrame(rows)
             dfres["price"] = dfres["price"].map(money)
+            dfres["airline"] = dfres["airline"].map(get_airline_name)
             dfres["departure_date"] = dfres["departure_date"].map(format_date)
             dfres["collected_at"] = dfres["collected_at"].map(format_datetime)
             dfres.columns = ["Origem", "Destino", "Companhia", "Preço", "Ida", "Provider", "Classificação", "Coletado em"]

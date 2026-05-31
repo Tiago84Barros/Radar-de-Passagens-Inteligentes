@@ -6,6 +6,7 @@ from email.message import EmailMessage
 
 from app.db import AlertLog, FlightQuote, FlightSearch
 from app.formatting import format_brl
+from data.airlines_catalog import get_airline_name
 from app.settings import get_settings
 from services.miles_service import DEFAULT_CENTS_PER_MILE, estimate_miles, format_miles
 from services.telegram_service import send_telegram_message
@@ -105,7 +106,7 @@ def build_alert_message(search: FlightSearch, quote: FlightQuote, decision) -> s
         f"🏷️  Classificação: {classification}\n"
         f"📊  Score: {score}/100\n"
         f"📉  Queda vs média histórica: {float(drop or 0):.1f}%\n"
-        f"✈️  Companhia: {quote.airline}\n"
+        f"✈️  Companhia: {get_airline_name(quote.airline)}\n"
         f"💸  Economia estimada: {format_brl(comparison if comparison > 0 else 0)}\n"
         f"🔌  Fonte: {quote.provider}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━\n"

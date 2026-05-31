@@ -17,6 +17,7 @@ from services.decision_engine import (
 )
 from services.miles_service import MILES_DISCLAIMER, cents_per_mile_label
 from utils.formatters import (
+    estimate_miles,
     format_brl,
     format_date_br,
     format_duration_short,
@@ -84,8 +85,10 @@ def _render_option_card(title: str, opt: dict | None, *, kind: str) -> None:
             unsafe_allow_html=True,
         )
         return
+    from data.airlines_catalog import get_airline_name
+
     price = float(opt.get("price_brl") or 0)
-    airline = opt.get("airline") or "—"
+    airline = get_airline_name(opt.get("airline")) if opt.get("airline") else "—"
     provider = opt.get("provider") or "—"
     miles = int(opt.get("estimated_miles") or 0)
     mile_value = float(opt.get("mile_value") or 0)
@@ -114,6 +117,67 @@ def _render_option_card(title: str, opt: dict | None, *, kind: str) -> None:
         f'<div class="option-card-value">{headline}</div>'
         f'<div class="option-card-sub">{sub}</div>'
         f'<div class="option-card-meta">{airline} · {provider}{(" · " + meta) if meta else ""}</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def render_search_summary(deals: list[dict], rec: dict | None, *, route: str, progress: dict | None = None) -> None:
+    """Compact 'resumo da busca' card shown after a search: route, cheapest price,
+    estimated miles, best airline (full name), all airlines found (full names),
+    provider, recommendation, total time and worker status."""
+    from data.airlines_catalog import get_airline_name
+
+    valid = [d for d in (deals or []) if float(d.get("price_brl") or 0) > 0]
+    if not valid:
+        return
+    cheapest = min(valid, key=lambda d: float(d.get("price_brl") or 0))
+    price = float(cheapest.get("price_brl") or 0)
+    miles = int(cheapest.get("estimated_miles") or estimate_miles(price))
+    best_airline = get_airline_name(cheapest.get("airline"))
+    provider = cheapest.get("provider") or "—"
+
+    # Distinct airlines found, full names, cheapest-first.
+    seen, airlines = set(), []
+    for d in sorted(valid, key=lambda d: float(d.get("price_brl") or 0)):
+        name = get_airline_name(d.get("airline"))
+        if name not in seen:
+            seen.add(name)
+            airlines.append(name)
+
+    recommendation = (rec or {}).get("recommendation", "—")
+    mod, emoji = _rec_style(recommendation)
+
+    total_time = ""
+    worker_html = ""
+    if progress:
+        total_time = f"{float(progress.get('api_seconds') or 0):.1f}s"
+        ws = progress.get("worker_status")
+        ws_label = {
+            "queued": "⏳ na fila", "in_progress": "🔄 em execução",
+            "completed": "✅ concluído", "failed": "❌ falhou",
+            "not_configured": "➖ não configurado",
+        }.get(ws, "")
+        if ws_label:
+            worker_html = f'<div class="summary-row"><span>Worker</span><b>{ws_label}</b></div>'
+
+    rows = [
+        ("Rota", route or "—"),
+        ("Menor preço", format_brl(price)),
+        ("Milhas estimadas", format_miles(miles)),
+        ("Melhor companhia", best_airline),
+        ("Fonte", provider),
+        ("Recomendação", f"{emoji} {recommendation}"),
+    ]
+    if total_time:
+        rows.append(("Tempo da busca (API)", total_time))
+    rows_html = "".join(f'<div class="summary-row"><span>{k}</span><b>{v}</b></div>' for k, v in rows)
+
+    st.markdown(
+        f'<div class="search-summary search-summary-{mod}">'
+        f'<div class="search-summary-title">🧾 Resumo da busca</div>'
+        f'{rows_html}{worker_html}'
+        f'<div class="summary-airlines"><span>Companhias encontradas:</span> {", ".join(airlines)}</div>'
         f'</div>',
         unsafe_allow_html=True,
     )
