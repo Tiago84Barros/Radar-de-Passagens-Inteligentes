@@ -45,6 +45,21 @@ class FlightSearch(Base):
     brazil_regions: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     international_regions: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     candidate_destinations: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # ── Scheduling / control fields (Controle de Buscas) ──────────────────────
+    # `status` is the new source of truth ('active'|'paused'|'deleted'|'error'|
+    # 'completed'); is_active is kept in sync for backward compatibility with the
+    # existing worker (is_active == True ⇔ status == 'active').
+    status: Mapped[str] = mapped_column(String(20), default="active", server_default=text("'active'"), index=True)
+    paused_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_run_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_run_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_status: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    search_type: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # 'route' | 'multi'
+    telegram_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("TRUE"))
+    consider_miles: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("TRUE"))
+    min_mile_value: Mapped[float] = mapped_column(Float, default=0.035, server_default=text("0.035"))
 
 
 class FlightQuote(Base):
@@ -150,6 +165,38 @@ class UserRule(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class SearchActionLog(Base):
+    """Audit trail of control actions on a scheduled search (pause/resume/delete/
+    run_now/update_frequency/update_telegram). New table — never replaces existing
+    logs; created automatically by create_all."""
+    __tablename__ = "search_action_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    search_id: Mapped[int] = mapped_column(Integer, index=True)
+    action: Mapped[str] = mapped_column(String(40))
+    previous_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    new_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class SearchRunLog(Base):
+    """History of executions of a scheduled search (one row per run). Powers the
+    'últimas execuções' panel in Controle de Buscas."""
+    __tablename__ = "search_run_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    search_id: Mapped[int] = mapped_column(Integer, index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(String(30), default="ok")
+    quotes_found: Mapped[int] = mapped_column(Integer, default=0)
+    best_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    recommendation: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+
+
 _ENGINE: Engine | None = None
 _SESSION_LOCAL: sessionmaker[Session] | None = None
 
@@ -220,6 +267,17 @@ def ensure_schema() -> None:
             "brazil_regions": "TEXT",
             "international_regions": "TEXT",
             "candidate_destinations": "TEXT",
+            "status": "VARCHAR(20) DEFAULT 'active'",
+            "paused_at": "TIMESTAMP",
+            "deleted_at": "TIMESTAMP",
+            "last_run_at": "TIMESTAMP",
+            "next_run_at": "TIMESTAMP",
+            "last_status": "VARCHAR(40)",
+            "last_error": "TEXT",
+            "search_type": "VARCHAR(20)",
+            "telegram_enabled": "BOOLEAN DEFAULT TRUE",
+            "consider_miles": "BOOLEAN DEFAULT TRUE",
+            "min_mile_value": "FLOAT DEFAULT 0.035",
         },
         "flight_quotes": {
             "raw_payload": "TEXT",
@@ -234,12 +292,21 @@ def ensure_schema() -> None:
         },
     }
     with engine.begin() as conn:
+        status_just_added = (
+            "flight_searches" in table_columns
+            and "status" not in table_columns["flight_searches"]
+        )
         for table, columns in additions.items():
             if table not in table_columns:
                 continue
             for column, column_type in columns.items():
                 if column not in table_columns[table]:
                     conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}"))
+        # One-time backfill: derive the new `status` from the legacy is_active flag
+        # so existing paused searches don't all become 'active' (only on first add).
+        if status_just_added:
+            conn.execute(text("UPDATE flight_searches SET status = 'active' WHERE is_active = TRUE"))
+            conn.execute(text("UPDATE flight_searches SET status = 'paused' WHERE is_active = FALSE"))
 
 
 @contextmanager

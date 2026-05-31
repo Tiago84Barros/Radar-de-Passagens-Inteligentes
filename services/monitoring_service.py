@@ -1,15 +1,18 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import select
 
 from app.alerts import dispatch_alerts
-from app.db import FlightSearch, init_db, session_scope
+from app.db import FlightSearch, SearchRunLog, init_db, session_scope
 from providers.provider_manager import get_last_provider_diagnostic, search_all_providers, search_year_price_calendar
 from services.database_service import has_recent_alert, log_source, quote_history, save_quote
 from services.deal_score import calculate_deal_score, should_send_alert
 from services.decision_engine import REC_BUY, REC_MILES, build_purchase_recommendation
+
+# Only searches in this status are executed by the worker (spec §6).
+RUNNABLE_STATUS = "active"
 
 
 def query_from_search(search: FlightSearch) -> dict:
@@ -26,6 +29,28 @@ def query_from_search(search: FlightSearch) -> dict:
     }
 
 
+def effective_status(search: FlightSearch) -> str:
+    """The search status, falling back to the legacy is_active flag when the new
+    `status` column is empty (backward compatibility)."""
+    status = (getattr(search, "status", None) or "").strip().lower()
+    if status:
+        return status
+    return "active" if search.is_active else "paused"
+
+
+def is_expired(search: FlightSearch, today: date | None = None) -> bool:
+    """A specific-route search whose departure date has passed is expired. Multi
+    destination ("ANYWHERE") sweeps use a forward window and never expire here."""
+    if str(search.destination or "").upper() == "ANYWHERE":
+        return False
+    dep = search.departure_date
+    if dep is None:
+        return False
+    if isinstance(dep, datetime):
+        dep = dep.date()
+    return dep < (today or date.today())
+
+
 def is_due(search: FlightSearch, now: datetime | None = None) -> bool:
     if not search.is_active:
         return False
@@ -36,6 +61,28 @@ def is_due(search: FlightSearch, now: datetime | None = None) -> bool:
     if last_checked.tzinfo is None:
         last_checked = last_checked.replace(tzinfo=timezone.utc)
     return now >= last_checked + timedelta(minutes=search.frequency_minutes)
+
+
+def is_eligible(search: FlightSearch, now: datetime | None = None, force: bool = False) -> bool:
+    """Whether the worker should run this search now: active status, the legacy
+    is_active flag still true, not expired, and due (unless forced)."""
+    if effective_status(search) != RUNNABLE_STATUS:
+        return False
+    if not search.is_active:
+        return False
+    if is_expired(search):
+        return False
+    return force or is_due(search, now)
+
+
+def get_searches_to_run(db, now: datetime | None = None, force: bool = False) -> list[FlightSearch]:
+    """Return the searches the worker should execute now (spec §6).
+
+    Ignores paused/deleted/completed/error statuses, expired searches, and those
+    not yet due. ``force`` skips the frequency check. This is the single source of
+    truth the GitHub Actions worker uses to decide what runs."""
+    rows = list(db.scalars(select(FlightSearch).where(FlightSearch.is_active.is_(True))))
+    return [s for s in rows if is_eligible(s, now=now, force=force)]
 
 
 def run_search_once(db, search: FlightSearch, include_year_calendar: bool = False) -> int:
@@ -53,7 +100,10 @@ def run_search_once(db, search: FlightSearch, include_year_calendar: bool = Fals
         alert_worthy = should_send_alert(decision, offer, search.max_price) or decision.get(
             "recommendation"
         ) in {REC_BUY, REC_MILES}
-        if alert_worthy and not has_recent_alert(db, search, quote):
+        # Per-search Telegram switch (spec §15): when off, still collect/save the
+        # quote but don't dispatch an alert.
+        telegram_on = bool(getattr(search, "telegram_enabled", True))
+        if alert_worthy and telegram_on and not has_recent_alert(db, search, quote):
             dispatch_alerts(db, search, quote, decision)
     if include_year_calendar:
         calendar_offers = search_year_price_calendar(query_from_search(search))
@@ -115,14 +165,62 @@ def _enrich_decision(decision: dict, offer: dict, search: FlightSearch, history:
     return decision
 
 
+def _best_price_for_search(db, search: FlightSearch) -> float | None:
+    from app.db import FlightQuote
+    from sqlalchemy import func as _func
+
+    val = db.scalar(
+        select(_func.min(FlightQuote.price)).where(
+            FlightQuote.search_id == search.id, FlightQuote.price > 0
+        )
+    )
+    return float(val) if val else None
+
+
+def execute_search(db, search: FlightSearch, include_year_calendar: bool = False, source: str = "worker") -> int:
+    """Run one search and record control/run-log fields (spec §5/§13).
+
+    Updates last_run_at / last_status / last_error / next_run_at on the search and
+    appends a SearchRunLog row. Returns the number of quotes saved. Failure-safe:
+    a single failing search records an 'error' run and is re-raised by the caller
+    only via the return value (never crashes the worker loop)."""
+    started = datetime.now(timezone.utc)
+    try:
+        saved = run_search_once(db, search, include_year_calendar=include_year_calendar)
+        best = _best_price_for_search(db, search)
+        search.last_run_at = started
+        search.last_status = "ok"
+        search.last_error = None
+        search.next_run_at = started + timedelta(minutes=search.frequency_minutes or 60)
+        search.updated_at = datetime.now(timezone.utc)
+        db.add(
+            SearchRunLog(
+                search_id=search.id, started_at=started, finished_at=datetime.now(timezone.utc),
+                status="ok", quotes_found=saved, best_price=best, source=source,
+            )
+        )
+        return saved
+    except Exception as exc:  # noqa: BLE001
+        search.last_run_at = started
+        search.last_status = "error"
+        search.last_error = str(exc)[:500]
+        search.next_run_at = started + timedelta(minutes=search.frequency_minutes or 60)
+        db.add(
+            SearchRunLog(
+                search_id=search.id, started_at=started, finished_at=datetime.now(timezone.utc),
+                status="error", quotes_found=0, error_message=str(exc)[:500], source=source,
+            )
+        )
+        return 0
+
+
 def run_due_searches(force: bool = False) -> dict:
     init_db()
     with session_scope() as db:
-        searches = list(db.scalars(select(FlightSearch).where(FlightSearch.is_active.is_(True))))
+        searches = get_searches_to_run(db, force=force)
         total = 0
         ran = 0
         for search in searches:
-            if force or is_due(search):
-                total += run_search_once(db, search)
-                ran += 1
+            total += execute_search(db, search, source="worker")
+            ran += 1
         return {"searches_checked": ran, "quotes_saved": total}

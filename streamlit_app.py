@@ -1403,6 +1403,310 @@ def render_opportunities(df: pd.DataFrame) -> None:
 
 # ─── Tab: Buscas Ativas ───────────────────────────────────────────────────────
 
+_STATUS_BADGE = {
+    "active": ("🟢", "Ativa"),
+    "paused": ("⏸️", "Pausada"),
+    "deleted": ("🗑️", "Deletada"),
+    "error": ("🔴", "Erro"),
+    "completed": ("✅", "Concluída"),
+}
+
+_CTRL_FREQ_OPTIONS = {"30 minutos": 30, "1 hora": 60, "3 horas": 180, "6 horas": 360, "12 horas": 720, "24 horas": 1440}
+
+
+def _ctrl_status_label(snap) -> str:
+    emoji, label = _STATUS_BADGE.get(snap.status, ("•", snap.status or "—"))
+    if snap.expired and snap.status == "active":
+        return f"{emoji} {label} · ⌛ expirada"
+    if (snap.last_status or "") == "error" and snap.status == "active":
+        return f"🔴 Ativa (último erro)"
+    return f"{emoji} {label}"
+
+
+def _ctrl_next_run(snap) -> str:
+    if snap.status != "active":
+        return "—"
+    if snap.last_run_at is None:
+        return "Na próxima rodada"
+    return format_datetime(snap.next_run_at) if snap.next_run_at else "Na próxima rodada"
+
+
+def _ctrl_type_label(snap) -> str:
+    return "Destinos mais baratos" if (snap.search_type == "multi" or str(snap.destination).upper() == "ANYWHERE") else "Rota específica"
+
+
+def _ctrl_geo_summary(snap) -> str:
+    if _ctrl_type_label(snap) != "Destinos mais baratos":
+        return "—"
+    try:
+        br = json.loads(snap.brazil_regions or "[]")
+        intl = json.loads(snap.international_regions or "[]")
+    except Exception:
+        br, intl = [], []
+    parts = []
+    if snap.area_scope:
+        parts.append(snap.area_scope)
+    regions = (br or []) + (intl or [])
+    if regions:
+        parts.append(", ".join(regions))
+    return " · ".join(parts) if parts else (snap.area_scope or "Todas as regiões")
+
+
+def render_search_control(summary: dict, df_quotes: pd.DataFrame) -> None:
+    """Operational panel for the scheduled searches the worker will execute."""
+    from services.search_control_service import (
+        alert_counts,
+        alerts_for_search,
+        delete_search,
+        duplicate_search,
+        get_action_logs,
+        get_run_logs,
+        latest_quotes_for_search,
+        list_searches,
+        pause_search,
+        resume_search,
+        run_now,
+        set_frequency,
+        set_telegram,
+    )
+
+    st.subheader("🛰️ Controle de Buscas")
+    st.caption("Painel operacional das buscas programadas. O GitHub Actions/worker executa "
+               "apenas buscas **ativas** e não expiradas.")
+
+    fb = st.session_state.pop("ctrl_feedback", None)
+    if fb:
+        getattr(st, fb.get("level", "info"))(fb["text"])
+
+    searches = list_searches()
+    counts = alert_counts()
+
+    # ── Summary cards ─────────────────────────────────────────────────────────
+    n_active = sum(1 for s in searches if s.status == "active" and not s.expired)
+    n_paused = sum(1 for s in searches if s.status == "paused")
+    n_error = sum(1 for s in searches if (s.last_status or "") == "error" and s.status == "active")
+    total_alerts = summary.get("alerts", sum(counts.values()))
+    last_worker = format_datetime(summary.get("latest_search"))
+    next_runs = [s.next_run_at for s in searches if s.status == "active" and s.next_run_at]
+    if any(s.status == "active" and s.last_run_at is None for s in searches):
+        next_prev = "Na próxima rodada"
+    elif next_runs:
+        next_prev = format_datetime(min(next_runs))
+    else:
+        next_prev = "—"
+
+    cards = [
+        ("🟢 Buscas ativas", n_active, "rec"),
+        ("⏸️ Buscas pausadas", n_paused, "mon"),
+        ("🔴 Buscas com erro", n_error, "rec"),
+        ("📨 Alertas enviados", total_alerts, "miles"),
+        ("🕒 Última execução", last_worker, "mon"),
+        ("⏭️ Próxima prevista", next_prev, "rec"),
+    ]
+    html = ['<div class="radar-overview-grid">']
+    for label, value, mod in cards:
+        html.append(
+            f'<div class="radar-card radar-{mod}"><div class="radar-card-label">{label}</div>'
+            f'<div class="radar-card-value">{value}</div></div>'
+        )
+    html.append("</div>")
+    st.markdown("".join(html), unsafe_allow_html=True)
+
+    if not searches:
+        st.info("Nenhuma busca programada ainda. Crie uma na lateral com **Buscar agora** "
+                "ou **Iniciar monitoramento**.")
+        return
+
+    st.divider()
+
+    # ── Filters ───────────────────────────────────────────────────────────────
+    with st.expander("🔎 Filtros", expanded=False):
+        fc = st.columns(4)
+        f_status = fc[0].multiselect("Status", ["active", "paused", "error", "completed"], default=[])
+        f_type = fc[1].multiselect("Tipo", ["Rota específica", "Destinos mais baratos"], default=[])
+        f_origin = fc[2].text_input("Origem contém", "").upper().strip()
+        f_telegram = fc[3].selectbox("Telegram", ["Todos", "Ativo", "Inativo"], index=0)
+
+    def _keep(s) -> bool:
+        eff_status = "error" if (s.last_status == "error" and s.status == "active") else s.status
+        if f_status and eff_status not in f_status:
+            return False
+        if f_type and _ctrl_type_label(s) not in f_type:
+            return False
+        if f_origin and f_origin not in str(s.origin or "").upper():
+            return False
+        if f_telegram == "Ativo" and not s.telegram_enabled:
+            return False
+        if f_telegram == "Inativo" and s.telegram_enabled:
+            return False
+        return True
+
+    filtered = [s for s in searches if _keep(s)]
+    if not filtered:
+        st.info("Nenhuma busca corresponde aos filtros selecionados.")
+        return
+
+    # ── Main table ────────────────────────────────────────────────────────────
+    best_by_search = {}
+    if not df_quotes.empty and "search_id" in df_quotes.columns and "preço" in df_quotes.columns:
+        best_by_search = df_quotes.dropna(subset=["preço"]).groupby("search_id")["preço"].min().to_dict()
+
+    table_rows = []
+    for s in filtered:
+        table_rows.append({
+            "ID": s.id,
+            "Status": _ctrl_status_label(s),
+            "Tipo": _ctrl_type_label(s),
+            "Origem": s.origin,
+            "Destino": "—" if _ctrl_type_label(s) != "Rota específica" else s.destination,
+            "Filtros geográficos": _ctrl_geo_summary(s),
+            "Ida": format_date(s.departure_date),
+            "Volta": format_date(s.return_date) if s.return_date else "—",
+            "Preço máx.": money(s.max_price),
+            "Milhas": "Sim" if s.consider_miles else "Não",
+            "Freq.": frequency_label(s.frequency_minutes),
+            "Telegram": "✅" if s.telegram_enabled else "—",
+            "Última exec.": format_datetime(s.last_run_at) if s.last_run_at else "—",
+            "Próxima exec.": _ctrl_next_run(s),
+            "Menor preço": money(best_by_search.get(s.id)) if best_by_search.get(s.id) else "—",
+            "Alertas": counts.get(s.id, 0),
+            "Criada": format_date(s.created_at),
+        })
+    st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
+    st.caption("O worker executa apenas buscas com status **Ativa** e data não expirada.")
+
+    # ── Selected-search action panel ──────────────────────────────────────────
+    st.markdown("### Ações da busca selecionada")
+    id_options = [s.id for s in filtered]
+    snap_by_id = {s.id: s for s in filtered}
+    selected_id = st.selectbox(
+        "Selecionar busca (ID)", id_options,
+        format_func=lambda i: f"#{i} · {snap_by_id[i].origin}→{snap_by_id[i].destination} ({_ctrl_status_label(snap_by_id[i])})",
+    )
+    sel = snap_by_id[selected_id]
+
+    # Resumo
+    rec_last = next((r.get("recommendation") for r in get_run_logs(selected_id, 5) if r.get("recommendation")), None)
+    resumo = [
+        ("Rota / filtros", f"{sel.origin} → {sel.destination}" if _ctrl_type_label(sel) == "Rota específica"
+            else f"{sel.origin} → {_ctrl_geo_summary(sel)}"),
+        ("Status", _ctrl_status_label(sel)),
+        ("Frequência", frequency_label(sel.frequency_minutes)),
+        ("Última execução", format_datetime(sel.last_run_at) if sel.last_run_at else "Nunca"),
+        ("Próxima execução", _ctrl_next_run(sel)),
+        ("Telegram", "Ativo" if sel.telegram_enabled else "Inativo"),
+        ("Preço máximo", money(sel.max_price)),
+        ("Milhas", f"Sim (mín. R$ {sel.min_mile_value:.3f})".replace(".", ",") if sel.consider_miles else "Não"),
+        ("Menor preço", money(best_by_search.get(sel.id)) if best_by_search.get(sel.id) else "—"),
+        ("Última recomendação", rec_last or "—"),
+    ]
+    rcols = st.columns(2)
+    for i, (label, value) in enumerate(resumo):
+        rcols[i % 2].markdown(
+            f'<div class="status-row"><span class="status-label">{label}</span>'
+            f'<span class="status-value">{value}</span></div>', unsafe_allow_html=True)
+
+    if sel.last_status == "error" and sel.last_error:
+        st.warning(f"Último erro: {sel.last_error}")
+    if sel.expired:
+        st.info("⌛ Esta busca está expirada (data de ida no passado). O worker a ignora. "
+                "Você pode deletá-la ou duplicá-la com novas datas.")
+
+    # Action buttons
+    b = st.columns(4)
+    if b[0].button("⏸️ Pausar", key="ctrl_pause", use_container_width=True, disabled=sel.status != "active"):
+        pause_search(selected_id)
+        st.session_state["ctrl_feedback"] = {"level": "success", "text": f"Busca #{selected_id} pausada."}
+        st.rerun()
+    if b[1].button("▶️ Reativar", key="ctrl_resume", use_container_width=True, disabled=sel.status == "active"):
+        resume_search(selected_id)
+        st.session_state["ctrl_feedback"] = {"level": "success", "text": f"Busca #{selected_id} reativada."}
+        st.rerun()
+    if b[2].button("🚀 Executar agora", key="ctrl_run", type="primary", use_container_width=True):
+        with st.spinner("Executando esta busca…"):
+            res = run_now(selected_id)
+        st.session_state["ctrl_feedback"] = {
+            "level": "success" if res.get("ok") else "warning", "text": res.get("message", "Concluído."),
+        }
+        st.rerun()
+    if b[3].button("📑 Duplicar", key="ctrl_dup", use_container_width=True):
+        new_id = duplicate_search(selected_id)
+        st.session_state["ctrl_feedback"] = {"level": "success", "text": f"Busca duplicada como #{new_id}. Ajuste as datas se necessário."}
+        st.rerun()
+
+    # Destructive: delete with confirmation
+    with st.expander("🗑️ Deletar busca", expanded=False):
+        confirm = st.checkbox("Confirmo que desejo deletar esta busca programada.", key="ctrl_del_confirm")
+        st.caption("Soft delete: o histórico de cotações e alertas é preservado; o worker para de executá-la.")
+        if st.button("Deletar definitivamente do painel", key="ctrl_delete", disabled=not confirm):
+            delete_search(selected_id)
+            st.session_state["ctrl_feedback"] = {"level": "success", "text": f"Busca #{selected_id} deletada (soft delete)."}
+            st.rerun()
+
+    # Frequency + Telegram editors
+    e = st.columns(2)
+    with e[0]:
+        cur_label = next((k for k, v in _CTRL_FREQ_OPTIONS.items() if v == sel.frequency_minutes), "1 hora")
+        new_freq = st.selectbox("Frequência de execução", list(_CTRL_FREQ_OPTIONS.keys()),
+                                index=list(_CTRL_FREQ_OPTIONS.keys()).index(cur_label), key="ctrl_freq")
+        if st.button("Salvar frequência", key="ctrl_freq_save", use_container_width=True):
+            set_frequency(selected_id, _CTRL_FREQ_OPTIONS[new_freq])
+            st.session_state["ctrl_feedback"] = {"level": "success", "text": f"Frequência atualizada para {new_freq}."}
+            st.rerun()
+    with e[1]:
+        tg = st.toggle("Alertas Telegram para esta busca", value=sel.telegram_enabled, key="ctrl_tg")
+        if tg != sel.telegram_enabled:
+            set_telegram(selected_id, tg)
+            st.session_state["ctrl_feedback"] = {"level": "success",
+                "text": f"Telegram {'ativado' if tg else 'desativado'} para a busca #{selected_id}."}
+            st.rerun()
+
+    # Detail expanders
+    with st.expander("📋 Ver detalhes (todos os parâmetros)"):
+        st.json({k: (v.isoformat() if hasattr(v, "isoformat") else v) for k, v in sel.as_dict().items()})
+
+    with st.expander("💰 Ver últimos resultados"):
+        rows = latest_quotes_for_search(selected_id)
+        if rows:
+            dfres = pd.DataFrame(rows)
+            dfres["price"] = dfres["price"].map(money)
+            dfres["departure_date"] = dfres["departure_date"].map(format_date)
+            dfres["collected_at"] = dfres["collected_at"].map(format_datetime)
+            dfres.columns = ["Origem", "Destino", "Companhia", "Preço", "Ida", "Provider", "Classificação", "Coletado em"]
+            st.dataframe(dfres, use_container_width=True, hide_index=True)
+        else:
+            st.caption("Sem cotações coletadas para esta busca ainda.")
+
+    with st.expander("📨 Ver alertas enviados"):
+        alerts = alerts_for_search(selected_id)
+        if alerts:
+            for a in alerts:
+                st.markdown(f"**{a['channel']}** · {a['status']} · {format_datetime(a['created_at'])}")
+        else:
+            st.caption("Nenhum alerta enviado para esta busca.")
+
+    with st.expander("🕒 Histórico de execuções"):
+        runs = get_run_logs(selected_id)
+        if runs:
+            dfr = pd.DataFrame(runs)
+            dfr["started_at"] = dfr["started_at"].map(format_datetime)
+            dfr["best_price"] = dfr["best_price"].map(lambda p: money(p) if p else "—")
+            dfr = dfr[["started_at", "status", "quotes_found", "best_price", "source", "error_message"]]
+            dfr.columns = ["Início", "Status", "Cotações", "Menor preço", "Origem", "Erro"]
+            st.dataframe(dfr, use_container_width=True, hide_index=True)
+        else:
+            st.caption("Esta busca ainda não foi executada.")
+
+    with st.expander("🧾 Auditoria de ações"):
+        logs = get_action_logs(selected_id)
+        if logs:
+            for a in logs:
+                st.markdown(f"`{format_datetime(a['created_at'])}` — **{a['action']}** "
+                            f"({a['previous_status']} → {a['new_status']}) {a['message'] or ''}")
+        else:
+            st.caption("Nenhuma ação registrada.")
+
+
 def render_searches(summary: dict, df_quotes: pd.DataFrame) -> None:
     st.subheader("Buscas ativas")
     searches = summary["searches"]
@@ -1730,11 +2034,11 @@ def main() -> None:
     (
         tab_home,
         tab_opportunities,
-        tab_searches,
+        tab_control,
         tab_history,
         tab_miles,
         tab_settings,
-    ) = st.tabs(["🏠 Início", "🎯 Oportunidades", "🛰️ Buscas Ativas", "📈 Histórico técnico", "🏆 Milhas", "⚙️ Configurações"])
+    ) = st.tabs(["🏠 Início", "🎯 Oportunidades", "🛰️ Controle de Buscas", "📈 Histórico técnico", "🏆 Milhas", "⚙️ Configurações"])
 
     with tab_home:
         render_home_tab(summary, real_df_quotes, provider_status)
@@ -1742,8 +2046,8 @@ def main() -> None:
     with tab_opportunities:
         render_opportunities(real_df_quotes)
 
-    with tab_searches:
-        render_searches(summary, real_df_quotes)
+    with tab_control:
+        render_search_control(summary, real_df_quotes)
 
     with tab_history:
         render_year_price_calendar(summary, real_df_quotes)
