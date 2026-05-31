@@ -7,7 +7,7 @@ from sqlalchemy import select
 from app.alerts import dispatch_alerts
 from app.db import FlightSearch, SearchRunLog, init_db, session_scope
 from providers.provider_manager import get_last_provider_diagnostic, search_all_providers, search_year_price_calendar
-from services.database_service import has_recent_alert, log_source, quote_history, save_quote
+from services.database_service import has_recent_alert, log_source, prune_old_quotes, quote_history, save_quote
 from services.deal_score import calculate_deal_score, should_send_alert
 from services.decision_engine import REC_BUY, REC_MILES, build_purchase_recommendation
 
@@ -214,7 +214,7 @@ def execute_search(db, search: FlightSearch, include_year_calendar: bool = False
         return 0
 
 
-def run_due_searches(force: bool = False) -> dict:
+def run_due_searches(force: bool = False, retention_days: int = 90) -> dict:
     init_db()
     with session_scope() as db:
         searches = get_searches_to_run(db, force=force)
@@ -223,4 +223,11 @@ def run_due_searches(force: bool = False) -> dict:
         for search in searches:
             total += execute_search(db, search, source="worker")
             ran += 1
-        return {"searches_checked": ran, "quotes_saved": total}
+        # Housekeeping: trim superseded snapshots older than the retention window
+        # so the database doesn't grow unbounded. Failure-safe — never breaks a run.
+        pruned = {}
+        try:
+            pruned = prune_old_quotes(db, keep_days=retention_days)
+        except Exception:
+            pruned = {}
+        return {"searches_checked": ran, "quotes_saved": total, "pruned": pruned}

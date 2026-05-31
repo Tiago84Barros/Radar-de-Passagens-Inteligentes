@@ -410,30 +410,6 @@ def quotes_df(quotes: list[FlightQuote], searches: list[FlightSearch], alerts_by
     return pd.DataFrame(rows)
 
 
-def searches_df(searches: list[FlightSearch], df_quotes: pd.DataFrame) -> pd.DataFrame:
-    lowest_by_search = {}
-    if not df_quotes.empty:
-        lowest_by_search = df_quotes.groupby("search_id")["preço"].min().to_dict()
-    return pd.DataFrame(
-        [
-            {
-                "id": search.id,
-                "status": "Ativa" if search.is_active else "Pausada",
-                "origem": search.origin,
-                "destino": search.destination,
-                "data de ida": search.departure_date,
-                "data de volta": search.return_date,
-                "preço máximo": search.max_price,
-                "frequência": frequency_label(search.frequency_minutes),
-                "última consulta": search.last_checked_at,
-                "menor preço encontrado": lowest_by_search.get(search.id),
-                "ação": "Pausar" if search.is_active else "Reativar",
-            }
-            for search in searches
-        ]
-    )
-
-
 def build_metrics(summary: dict, df: pd.DataFrame) -> dict[str, Any]:
     recent = pd.DataFrame()
     if not df.empty:
@@ -1734,39 +1710,6 @@ def render_search_control(summary: dict, df_quotes: pd.DataFrame) -> None:
             st.caption("Nenhuma ação registrada.")
 
 
-def render_searches(summary: dict, df_quotes: pd.DataFrame) -> None:
-    st.subheader("Buscas ativas")
-    searches = summary["searches"]
-    if not searches:
-        st.info("Nenhuma busca cadastrada. O painel de criação fica na sidebar.")
-        return
-    df = searches_df(searches, df_quotes)
-    display = df.copy()
-    display["milhas est."] = display["menor preço encontrado"].apply(
-        lambda p: format_miles(estimate_miles(float(p))) if pd.notna(p) and p else "–"
-    )
-    display["data de ida"] = display["data de ida"].map(format_date)
-    display["data de volta"] = display["data de volta"].map(format_date)
-    display["última consulta"] = display["última consulta"].map(format_datetime)
-    display["preço máximo"] = display["preço máximo"].map(money)
-    display["menor preço encontrado"] = display["menor preço encontrado"].map(money)
-    st.dataframe(display, use_container_width=True, hide_index=True)
-    st.caption("* Milhas estimadas com base em R$ 0,035/milha. Não representa disponibilidade real em programas de fidelidade.")
-
-    st.markdown("**Pausar ou reativar monitoramento**")
-    for start in range(0, len(searches), 4):
-        cols = st.columns(4)
-        for col, search in zip(cols, searches[start:start + 4]):
-            action = "Pausar" if search.is_active else "Reativar"
-            label = f"{action} #{search.id} · {search.origin}→{search.destination}"
-            if col.button(label, key=f"toggle-search-{search.id}", use_container_width=True):
-                with session_scope() as db:
-                    item = db.get(FlightSearch, search.id)
-                    if item:
-                        item.is_active = not item.is_active
-                st.rerun()
-
-
 # ─── Tab: Histórico ───────────────────────────────────────────────────────────
 
 def render_year_price_calendar(summary: dict, df: pd.DataFrame) -> None:
@@ -2031,6 +1974,27 @@ DATABASE_URL = "postgresql://user:pass@host/db" """,
     )
     st.markdown("**Diagnóstico do banco**")
     st.json(database_diagnostics())
+
+    # ── Manutenção / retenção do banco ────────────────────────────────────────
+    st.divider()
+    st.markdown("**🧹 Manutenção do banco**")
+    st.caption(
+        "Remove apenas cotações **antigas e já superadas** (snapshots que deixaram de ser o "
+        "preço vigente). Preços atuais, buscas, alertas e o histórico recente são preservados. "
+        "O monitor já faz essa limpeza automaticamente a cada execução."
+    )
+    keep_days = st.slider("Manter histórico dos últimos (dias)", min_value=30, max_value=365, value=90, step=30)
+    if st.button(f"Limpar cotações superadas com mais de {keep_days} dias", use_container_width=True):
+        from services.database_service import prune_old_quotes
+        try:
+            with session_scope() as db:
+                result = prune_old_quotes(db, keep_days=keep_days)
+            st.success(
+                f"🧹 Limpeza concluída: {result['quotes_deleted']} cotação(ões) antiga(s) e "
+                f"{result['logs_deleted']} log(s) removido(s). Histórico dos últimos {keep_days} dias preservado."
+            )
+        except Exception as exc:  # noqa: BLE001
+            st.warning(f"Não foi possível limpar agora: {exc}")
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────

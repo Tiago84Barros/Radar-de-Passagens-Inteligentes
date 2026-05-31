@@ -159,6 +159,37 @@ def save_best_deals(db, origin_iata: str, opportunities: list[dict]) -> int:
     return saved
 
 
+def prune_old_quotes(db, keep_days: int = 90) -> dict:
+    """Cap unbounded growth by deleting only SUPERSEDED quote snapshots older than
+    ``keep_days``. Conservative on purpose:
+
+      • keeps every ``is_current`` snapshot regardless of age (the live price);
+      • keeps all quotes within the retention window (recent history / averages);
+      • also trims noisy ``source_logs`` older than the window.
+
+    Never touches flight_searches, alert_logs, best_deals or current prices.
+    Returns the number of rows removed per table."""
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import delete
+
+    from app.db import FlightQuote, SourceLog
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max(int(keep_days), 1))
+    quotes = db.execute(
+        delete(FlightQuote).where(
+            FlightQuote.is_current.is_(False),
+            FlightQuote.detected_at < cutoff,
+        )
+    )
+    logs = db.execute(delete(SourceLog).where(SourceLog.created_at < cutoff))
+    return {
+        "quotes_deleted": int(quotes.rowcount or 0),
+        "logs_deleted": int(logs.rowcount or 0),
+        "keep_days": int(keep_days),
+    }
+
+
 def log_source(db, source: str, status: str, message: str | None = None) -> None:
     db.add(SourceLog(source=source[:40], status=status[:40], message=message))
     db.add(ProviderLog(provider=source[:40], status=status[:40], error_message=message))
