@@ -56,12 +56,20 @@ def deal_to_opportunity(
     params.setdefault("max_price", None)
     rec = build_purchase_recommendation([deal], params)
 
+    # Geographic region/continent (for badges and alerts). Falls back to the
+    # broad national/international label when the IATA isn't in the geo catalog.
+    from services.geography_filter_service import region_for_iata
+
+    region_scope, region_label = region_for_iata(dest_iata)
+
     return {
         "origin_iata": str(origin_iata or deal.get("origin_iata") or deal.get("origem") or "").upper(),
         "destination_iata": dest_iata,
         "destination_city": deal.get("destination_city") or info.get("city") or dest_iata,
         "destination_country": deal.get("destination_country") or info.get("country") or "",
         "destination_type": "national" if category == "national" else "international",
+        "region": region_label or ("Brasil" if category == "national" else "Exterior"),
+        "region_scope": region_scope or ("Brasil" if category == "national" else "Exterior"),
         "departure_date": deal.get("departure_date"),
         "return_date": deal.get("return_date"),
         "cash_price": price,
@@ -90,6 +98,7 @@ def find_cheapest_destinations(
     fill_demo: bool = True,
     search_params: dict | None = None,
     min_mile_value: float = DEFAULT_CENTS_PER_MILE,
+    candidate_iatas: list[str] | None = None,
 ) -> dict[str, list[dict]]:
     """Rank the cheapest destinations as opportunities, split Brazil vs Exterior.
 
@@ -98,9 +107,14 @@ def find_cheapest_destinations(
     controls which buckets are returned. ``origin`` filters real deals to that
     origin when provided (demo deals are origin-agnostic).
 
+    ``candidate_iatas`` (optional) restricts results to those destination airports
+    — the geographic filter applied before ranking. ``None``/empty keeps every
+    destination in the chosen scope (preserves the previous behaviour).
+
     Returns ``{"national": [...], "international": [...]}``.
     """
     cents = float(min_mile_value or DEFAULT_CENTS_PER_MILE)
+    allow = {c.upper() for c in (candidate_iatas or [])}
 
     # Pull a generous slice from the preserved engine, then filter/convert.
     national_deals, international_deals = get_home_deals(
@@ -123,6 +137,12 @@ def find_cheapest_destinations(
             # Only narrow to the origin if it leaves us something to show.
             if filtered:
                 items = filtered
+        # Geographic filter: keep only eligible destination airports.
+        if allow:
+            items = [
+                d for d in items
+                if str(d.get("destination_iata") or d.get("destino") or "").upper() in allow
+            ]
         opps = [
             deal_to_opportunity(
                 d, origin_iata=origin_code or None, search_params=search_params, min_mile_value=cents

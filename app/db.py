@@ -39,6 +39,12 @@ class FlightSearch(Base):
     last_checked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Geographic filters used by a multi-destination ("ANYWHERE") search. Stored
+    # as JSON text so the monitor can re-run the same regional sweep later.
+    area_scope: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    brazil_regions: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    international_regions: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    candidate_destinations: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
 
 class FlightQuote(Base):
@@ -210,6 +216,10 @@ def ensure_schema() -> None:
         "flight_searches": {
             "adults": "INTEGER DEFAULT 1",
             "updated_at": "TIMESTAMP",
+            "area_scope": "VARCHAR(20)",
+            "brazil_regions": "TEXT",
+            "international_regions": "TEXT",
+            "candidate_destinations": "TEXT",
         },
         "flight_quotes": {
             "raw_payload": "TEXT",

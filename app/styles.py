@@ -1225,6 +1225,21 @@ a.buy-link {
 .opp-card-price { font-size: 1.5rem; font-weight: 900; color: #5EEAD4; margin-top: 4px; }
 .opp-card-miles { font-size: .84rem; color: rgba(248,250,252,.85); }
 .opp-card-meta { font-size: .76rem; color: rgba(248,250,252,.7); margin-top: 2px; }
+.opp-geo-badges { display: flex; flex-wrap: wrap; gap: 5px; margin: 5px 0 2px; }
+.geo-badge { font-size: .68rem; font-weight: 800; padding: 2px 8px; border-radius: 999px;
+    backdrop-filter: blur(3px); }
+.geo-nat   { background: rgba(52,211,153,.85); color: #06241f; }
+.geo-intl  { background: rgba(96,165,250,.85); color: #06203f; }
+.geo-region{ background: rgba(248,250,252,.18); color: #fff; }
+.geo-iata  { background: rgba(15,23,42,.55); color: #cbd5e1; letter-spacing: .04em; }
+
+/* ── Applied geographic filter summary ───────────────────────── */
+.filter-summary {
+    margin: 4px 0 12px; padding: 10px 14px; border-radius: 10px;
+    background: var(--radar-teal-soft); border: 1px solid rgba(45,212,191,.22);
+    color: var(--radar-ink); font-size: .92rem;
+}
+.filter-count { color: var(--radar-teal); font-weight: 800; margin-left: 8px; }
 
 /* ── Responsive ──────────────────────────────────────────────── */
 @media (max-width: 900px) {

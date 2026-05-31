@@ -28,6 +28,15 @@ def build_alert_message(search: FlightSearch, quote: FlightQuote, decision) -> s
     mile_value = getattr(decision, "mile_value", None) or decision.get("mile_value") or 0.0
     mile_value_label = f"R$ {float(mile_value):.3f}".replace(".", ",") if mile_value else "—"
 
+    # Geographic region/continent of the destination (spec §9), when known.
+    region_label = None
+    try:
+        from services.geography_filter_service import region_for_iata
+
+        _scope, region_label = region_for_iata(quote.destination)
+    except Exception:
+        region_label = None
+
     # Emoji for classification
     emoji_map = {
         "excelente oportunidade": "🏆",
@@ -71,11 +80,19 @@ def build_alert_message(search: FlightSearch, quote: FlightQuote, decision) -> s
 
     rec_line = f"🧭  Recomendação: {recommendation}\n" if recommendation else ""
     rec_reason_line = f"💡  Motivo: {rec_reason}\n" if rec_reason else ""
+    region_line = f"🌍  Região: {region_label}\n" if region_label else ""
+    headline = (
+        f"📡 Radar encontrou oportunidade em {region_label}: "
+        f"{quote.origin} → {quote.destination} por {format_brl(quote.price)}.\n"
+        if region_label else ""
+    )
 
     return (
         f"{emoji} Radar de Passagens Inteligentes\n"
+        f"{headline}"
         f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"✈️  Rota: {quote.origin} → {quote.destination}\n"
+        f"{region_line}"
         f"📅  Datas: {date_info or 'a confirmar'}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"{rec_line}"

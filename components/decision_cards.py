@@ -212,6 +212,19 @@ def _opportunity_card_html(opp: dict) -> str:
     else:
         bg = f"linear-gradient(180deg,rgba(8,17,31,.4) 0%,rgba(8,17,31,.94) 100%), {gradient}"
 
+    # Geographic badges: Nacional/Internacional · region/continent · IATA.
+    is_national = (opp.get("destination_type") == "national")
+    type_label = "Nacional" if is_national else "Internacional"
+    type_cls = "geo-nat" if is_national else "geo-intl"
+    region = opp.get("region") or ("Brasil" if is_national else "Exterior")
+    geo_badges = (
+        f'<div class="opp-geo-badges">'
+        f'<span class="geo-badge {type_cls}">{type_label}</span>'
+        f'<span class="geo-badge geo-region">{region}</span>'
+        f'<span class="geo-badge geo-iata">{iata}</span>'
+        f'</div>'
+    )
+
     cid = f"opp-{iata}-{int(price)}"
     return (
         f"<style>#{cid}{{background-image:{bg};}}</style>"
@@ -221,6 +234,7 @@ def _opportunity_card_html(opp: dict) -> str:
         f'<div class="opp-card-code">{iata} {demo_tag}</div>'
         f'<div class="opp-card-city">{city}</div>'
         f'<div class="opp-card-country">{country}</div>'
+        f'{geo_badges}'
         f'<div class="opp-card-price">{format_brl(price)}</div>'
         f'<div class="opp-card-miles">≈ {format_miles(miles)} estimadas</div>'
         f'<div class="opp-card-meta">📅 {when} · Score {score}/100 · {source}</div>'

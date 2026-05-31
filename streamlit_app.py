@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import date, timedelta
 from typing import Any
 
@@ -33,6 +34,18 @@ from components.decision_cards import (
     render_radar_overview,
 )
 from data.destinations_catalog import BRAZIL_IATAS, DESTINATIONS, get_destination_info
+from data.geography_catalog import (
+    AREA_BOTH,
+    AREA_BRAZIL,
+    AREA_INTERNATIONAL,
+    BRAZIL_REGIONS,
+    INTERNATIONAL_REGIONS,
+)
+from services.geography_filter_service import (
+    describe_filters,
+    get_destination_iatas_for_filters,
+    scope_for_area,
+)
 from services.decision_engine import build_purchase_recommendation
 from services.multi_destination_adapter import (
     find_cheapest_destinations,
@@ -533,28 +546,12 @@ def render_header(provider_status: dict[str, Any], latest_provider_log: Provider
 
 # ─── Multi-destination search ─────────────────────────────────────────────────
 
-def _candidate_destinations(origin_code: str, scope: str, limit_per_cat: int = 10) -> list[str]:
-    """Candidate destination IATAs from the catalog, filtered by scope and origin."""
-    wanted = {
-        "nacional": {"national"},
-        "internacional": {"international"},
-        "ambos": {"national", "international"},
-    }.get(scope, {"national", "international"})
-    nat, intl = [], []
-    for iata, info in DESTINATIONS.items():
-        if iata == origin_code:
-            continue
-        cat = info.get("category")
-        if cat not in wanted:
-            continue
-        (nat if cat == "national" else intl).append(iata)
-    return nat[:limit_per_cat] + intl[:limit_per_cat]
-
-
 def _run_multi_destination_search(
     origin_location,
     *,
-    scope: str,
+    area_scope: str,
+    brazil_regions: list[str],
+    international_regions: list[str],
     window_days: int,
     max_price: float,
     currency: str,
@@ -562,9 +559,12 @@ def _run_multi_destination_search(
     min_mile_value: float,
     start_monitoring: bool,
 ) -> None:
-    """Run the preserved per-route engine across many destinations (live sweep)
-    and store ranked opportunities for the Home tab. Reuses
-    ``services.multi_destination_adapter.live_multi_destination_search``."""
+    """Run the preserved per-route engine across many destinations (live sweep).
+
+    The geographic filter (``services.geography_filter_service``) resolves the
+    selected regions into the candidate destination list; the search engine
+    itself is unchanged — it just receives a narrower set of destinations.
+    Stores ranked opportunities + the applied filters for the Home tab."""
     origin_code = origin_location.code
     departure = date.today() + timedelta(days=min(window_days, 60))
     params = {
@@ -576,14 +576,32 @@ def _run_multi_destination_search(
         "user_min_mile_value": min_mile_value,
         "adults": 1,
     }
-    candidates = _candidate_destinations(origin_code, scope)
+    candidates = get_destination_iatas_for_filters(
+        area_scope, brazil_regions, international_regions, origin=origin_code
+    )
+
+    if not candidates:
+        st.session_state["multi_results"] = {"national": [], "international": []}
+        st.session_state["multi_context"] = {
+            "origin_code": origin_code, "origin_label": origin_location.label,
+            "area_scope": area_scope, "brazil_regions": brazil_regions,
+            "international_regions": international_regions, "candidate_count": 0,
+            "scope": scope_for_area(area_scope), "min_mile_value": min_mile_value,
+            "max_price": max_price,
+        }
+        st.session_state["last_search_feedback"] = {
+            "text": "Nenhum destino elegível encontrado para os filtros selecionados.",
+            "level": "warning",
+        }
+        return
+
     opportunities = live_multi_destination_search(
-        origin_code, candidates, params, max_destinations=12, min_mile_value=min_mile_value
+        origin_code, candidates, params, max_destinations=16, min_mile_value=min_mile_value
     )
 
     # Register a multi-destination monitor entry (destination = ANYWHERE) so the
     # search shows up in "Buscas ativas" and the scheduled monitor can refresh it.
-    # Also persist the ranked opportunities into best_deals (new table).
+    # Persist the applied geo filters on it and the ranked opportunities.
     try:
         with session_scope() as db:
             db.add(
@@ -600,6 +618,10 @@ def _run_multi_destination_search(
                     trip_type="one_way",
                     frequency_minutes=60,
                     is_active=bool(start_monitoring),
+                    area_scope=area_scope,
+                    brazil_regions=json.dumps(brazil_regions, ensure_ascii=False),
+                    international_regions=json.dumps(international_regions, ensure_ascii=False),
+                    candidate_destinations=json.dumps(candidates, ensure_ascii=False),
                 )
             )
             save_best_deals(db, origin_code, opportunities)
@@ -615,7 +637,11 @@ def _run_multi_destination_search(
     st.session_state["multi_context"] = {
         "origin_code": origin_code,
         "origin_label": origin_location.label,
-        "scope": scope,
+        "scope": scope_for_area(area_scope),
+        "area_scope": area_scope,
+        "brazil_regions": brazil_regions,
+        "international_regions": international_regions,
+        "candidate_count": len(candidates),
         "window_days": window_days,
         "consider_miles": consider_miles,
         "min_mile_value": min_mile_value,
@@ -624,7 +650,7 @@ def _run_multi_destination_search(
     found = len(opportunities)
     verb = "Monitorando" if start_monitoring else "Encontrados"
     st.session_state["last_search_feedback"] = {
-        "text": f"✅ {verb} {found} destino(s) a partir de {origin_code}.",
+        "text": f"✅ {verb} {found} destino(s) entre {len(candidates)} aeroportos no radar.",
         "level": "success",
     }
 
@@ -688,21 +714,47 @@ def render_sidebar(summary: dict, provider_status: dict[str, Any], db_connected:
         elif not destination_input:
             st.session_state.pop("home_destination", None)
 
+        # ── Filtros geográficos (fora do form para reagir na hora) ──────────
+        area_scope = AREA_BOTH
+        brazil_regions: list[str] = []
+        international_regions: list[str] = []
+        if is_multi:
+            area_scope = st.radio(
+                "Área da busca",
+                [AREA_BRAZIL, AREA_INTERNATIONAL, AREA_BOTH],
+                index=2,
+                horizontal=True,
+                key="multi_area_scope",
+                help="Refine onde o radar procura os destinos mais baratos.",
+            )
+            if area_scope in (AREA_BRAZIL, AREA_BOTH):
+                brazil_regions = st.multiselect(
+                    "Regiões do Brasil",
+                    list(BRAZIL_REGIONS.keys()),
+                    key="multi_brazil_regions",
+                    help="Vazio = todas as regiões do Brasil.",
+                )
+            if area_scope in (AREA_INTERNATIONAL, AREA_BOTH):
+                international_regions = st.multiselect(
+                    "Continentes/regiões internacionais",
+                    list(INTERNATIONAL_REGIONS.keys()),
+                    key="multi_intl_regions",
+                    help="Vazio = todas as regiões internacionais.",
+                )
+
         with st.form("new_search_form", clear_on_submit=False):
             if is_multi:
-                # Multiple-destination mode: flexible window + scope instead of a
-                # single destination/date.
+                # Multiple-destination mode: flexible window instead of a single
+                # destination/date. Geographic filters are chosen above the form.
                 travel_window_label = st.selectbox(
                     "Janela de viagem", list(TRAVEL_WINDOW_OPTIONS.keys()), index=2
                 )
-                scope_label = st.selectbox("Destinos", list(SCOPE_OPTIONS.keys()), index=0)
                 departure = None
                 trip_label = "ida e volta"
                 return_date = None
                 flexibility = "mês inteiro"
             else:
                 travel_window_label = None
-                scope_label = "Ambos"
                 departure = st.date_input("Data de ida", value=None, format="DD/MM/YYYY")
                 trip_label = st.selectbox("Tipo de viagem", list(TRIP_TYPE_OPTIONS.keys()), index=1)
                 return_date = st.date_input(
@@ -744,7 +796,10 @@ def render_sidebar(summary: dict, provider_status: dict[str, Any], db_connected:
             "consider_miles": bool(consider_miles),
             "min_mile_value": float(min_mile_value),
             "max_price": float(max_price),
-            "scope": SCOPE_OPTIONS.get(scope_label, "ambos"),
+            "scope": scope_for_area(area_scope),
+            "area_scope": area_scope,
+            "brazil_regions": list(brazil_regions),
+            "international_regions": list(international_regions),
             "travel_window_days": TRAVEL_WINDOW_OPTIONS.get(travel_window_label or "", 90),
         }
 
@@ -756,7 +811,9 @@ def render_sidebar(summary: dict, provider_status: dict[str, Any], db_connected:
             else:
                 _run_multi_destination_search(
                     origin_location,
-                    scope=SCOPE_OPTIONS.get(scope_label, "ambos"),
+                    area_scope=area_scope,
+                    brazil_regions=list(brazil_regions),
+                    international_regions=list(international_regions),
                     window_days=TRAVEL_WINDOW_OPTIONS.get(travel_window_label or "", 90),
                     max_price=float(max_price),
                     currency=currency,
@@ -1172,6 +1229,9 @@ def _render_home_multi(summary: dict, df_quotes: pd.DataFrame, prefs: dict) -> N
     origin = st.session_state.get("home_origin") or {}
     origin_code = str(origin.get("code") or "").upper()
     scope = prefs.get("scope", "ambos")
+    area_scope = prefs.get("area_scope", AREA_BOTH)
+    brazil_regions = prefs.get("brazil_regions") or []
+    international_regions = prefs.get("international_regions") or []
     min_mile_value = float(prefs.get("min_mile_value") or DEFAULT_CENTS_PER_MILE)
     max_price = prefs.get("max_price")
 
@@ -1186,18 +1246,35 @@ def _render_home_multi(summary: dict, df_quotes: pd.DataFrame, prefs: dict) -> N
 
     render_airport_cards(origin_code, None)
 
+    # Eligible destinations from the geographic filter (in front of the engine).
+    candidates = get_destination_iatas_for_filters(
+        area_scope, brazil_regions, international_regions, origin=origin_code
+    )
+    if not candidates:
+        _empty_state("🚫 Nenhum destino elegível encontrado para os filtros selecionados.")
+        return
+
+    # Applied-filter summary + eligible-airport count (spec §6).
+    st.markdown(
+        f'<div class="filter-summary">🧭 {describe_filters(area_scope, brazil_regions, international_regions)}'
+        f'<span class="filter-count">{len(candidates)} aeroportos no radar.</span></div>',
+        unsafe_allow_html=True,
+    )
+
     results = st.session_state.get("multi_results")
     ctx = st.session_state.get("multi_context") or {}
     same_origin = str(ctx.get("origin_code") or "").upper() == origin_code
 
     # Fall back to ranking the DB-collected destinations when there's no live
-    # sweep yet (preserved get_home_deals engine via the adapter).
+    # sweep yet (preserved get_home_deals engine via the adapter), now restricted
+    # to the eligible airports.
     if not (results and same_origin):
         ranked = find_cheapest_destinations(
             df_quotes, origin=origin_code, scope=scope, limit=6, fill_demo=True,
             search_params={"max_price": max_price, "consider_miles": prefs.get("consider_miles", True),
                            "user_min_mile_value": min_mile_value},
             min_mile_value=min_mile_value,
+            candidate_iatas=candidates,
         )
         results = {"national": ranked.get("national", []), "international": ranked.get("international", [])}
         if not any(results.values()):
