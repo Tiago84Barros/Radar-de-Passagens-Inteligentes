@@ -255,8 +255,43 @@ def init_db() -> None:
     ensure_schema()
 
 
+def _run_migration_ddl(engine: Engine, sql: str, *, retries: int = 6) -> bool:
+    """Run one DDL/backfill statement safely against a live database.
+
+    Each statement runs in its OWN short transaction so successful migrations are
+    committed incrementally (a later failure never rolls back earlier columns).
+
+    On PostgreSQL we set a short ``lock_timeout`` and a high ``statement_timeout``
+    so the statement waits briefly for the AccessExclusiveLock and fails *fast and
+    cleanly* if the live app is holding the table — instead of being canceled by
+    the global statement timeout. We then retry with backoff to slip in between
+    the app's reads. Returns True on success, False if it ultimately gave up
+    (non-fatal: the app keeps booting and the next reload retries)."""
+    import time
+
+    is_pg = engine.dialect.name == "postgresql"
+    last_exc: Exception | None = None
+    for attempt in range(retries):
+        try:
+            with engine.begin() as conn:
+                if is_pg:
+                    # Bounded lock wait + generous statement budget for this txn only.
+                    conn.execute(text("SET LOCAL lock_timeout = '6s'"))
+                    conn.execute(text("SET LOCAL statement_timeout = '120s'"))
+                conn.execute(text(sql))
+            return True
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            if attempt < retries - 1:
+                time.sleep(2 * (attempt + 1))  # 2s, 4s, 6s, 8s, 10s
+    # Give up without crashing startup; surface in logs for diagnosis.
+    print(f"[ensure_schema] could not apply (will retry next boot): {sql} -> {last_exc}")
+    return False
+
+
 def ensure_schema() -> None:
     engine = get_engine()
+    is_pg = engine.dialect.name == "postgresql"
     existing = inspect(engine)
     table_columns = {table: {column["name"] for column in existing.get_columns(table)} for table in existing.get_table_names()}
     additions = {
@@ -291,22 +326,31 @@ def ensure_schema() -> None:
             "error_message": "TEXT",
         },
     }
-    with engine.begin() as conn:
-        status_just_added = (
-            "flight_searches" in table_columns
-            and "status" not in table_columns["flight_searches"]
-        )
-        for table, columns in additions.items():
-            if table not in table_columns:
-                continue
-            for column, column_type in columns.items():
-                if column not in table_columns[table]:
-                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}"))
-        # One-time backfill: derive the new `status` from the legacy is_active flag
-        # so existing paused searches don't all become 'active' (only on first add).
-        if status_just_added:
-            conn.execute(text("UPDATE flight_searches SET status = 'active' WHERE is_active = TRUE"))
-            conn.execute(text("UPDATE flight_searches SET status = 'paused' WHERE is_active = FALSE"))
+    status_just_added = (
+        "flight_searches" in table_columns
+        and "status" not in table_columns["flight_searches"]
+    )
+    for table, columns in additions.items():
+        if table not in table_columns:
+            continue
+        missing = [(c, t) for c, t in columns.items() if c not in table_columns[table]]
+        if not missing:
+            continue
+        if is_pg:
+            # One ALTER adds every missing column in a single lock acquisition,
+            # minimising contention with the live app. IF NOT EXISTS guards races
+            # with another instance booting at the same time.
+            clauses = ", ".join(f"ADD COLUMN IF NOT EXISTS {c} {t}" for c, t in missing)
+            _run_migration_ddl(engine, f"ALTER TABLE {table} {clauses}")
+        else:
+            # SQLite supports only one ADD COLUMN per ALTER statement.
+            for column, column_type in missing:
+                _run_migration_ddl(engine, f"ALTER TABLE {table} ADD COLUMN {column} {column_type}")
+    # One-time backfill: derive the new `status` from the legacy is_active flag so
+    # existing paused searches don't all become 'active' (only on first add).
+    if status_just_added:
+        _run_migration_ddl(engine, "UPDATE flight_searches SET status = 'active' WHERE is_active = TRUE", retries=2)
+        _run_migration_ddl(engine, "UPDATE flight_searches SET status = 'paused' WHERE is_active = FALSE", retries=2)
 
 
 @contextmanager
