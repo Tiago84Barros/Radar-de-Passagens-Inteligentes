@@ -25,12 +25,18 @@ def _airport_card_html(info: dict, badge_label: str, badge_kind: str) -> str:
     cid = f"apc-{badge_kind}-{iata}"
     airport_html = f'<div class="airport-card-name">🛬 {airport}</div>' if airport else ""
     country_html = f'<div class="airport-card-country">{country}</div>' if country else ""
+    # When the photo is generic (not a specific city postcard), say so discreetly.
+    fallback_html = (
+        '<span class="airport-card-fallback">📷 imagem ilustrativa</span>'
+        if info.get("image_is_fallback") else ""
+    )
 
     return (
         f"<style>#{cid}{{background-image:{bg};}}</style>"
         f'<div id="{cid}" class="airport-card">'
         f'<div class="airport-card-overlay">'
         f'<span class="airport-card-badge badge-{badge_kind}">{badge_label}</span>'
+        f'{fallback_html}'
         f'<div class="airport-card-code">{iata}</div>'
         f'<div class="airport-card-city">{city}</div>'
         f'{country_html}'

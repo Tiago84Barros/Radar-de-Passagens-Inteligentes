@@ -126,7 +126,9 @@ def render_search_summary(deals: list[dict], rec: dict | None, *, route: str, pr
     """Compact 'resumo da busca' card shown after a search: route, cheapest price,
     estimated miles, best airline (full name), all airlines found (full names),
     provider, recommendation, total time and worker status."""
-    from data.airlines_catalog import get_airline_name
+    from data.airlines_catalog import get_airline_info, get_airline_name
+
+    from utils.formatters import format_collected_age
 
     valid = [d for d in (deals or []) if float(d.get("price_brl") or 0) > 0]
     if not valid:
@@ -134,8 +136,20 @@ def render_search_summary(deals: list[dict], rec: dict | None, *, route: str, pr
     cheapest = min(valid, key=lambda d: float(d.get("price_brl") or 0))
     price = float(cheapest.get("price_brl") or 0)
     miles = int(cheapest.get("estimated_miles") or estimate_miles(price))
-    best_airline = get_airline_name(cheapest.get("airline"))
+    best_info = get_airline_info(cheapest.get("airline"))
+    best_airline = best_info["name"]
+    best_logo = (
+        f'<img src="{best_info["logo_url"]}" alt="{best_airline}" class="summary-logo" '
+        f'onerror="this.style.display=&#39;none&#39;">' if best_info.get("logo_url") else "✈️ "
+    )
     provider = cheapest.get("provider") or "—"
+
+    # Most recent quote timestamp ("há X") + how many options were found.
+    ages = [d.get("collected_at") for d in valid if d.get("collected_at")]
+    recent_age = ""
+    if ages:
+        recent_age = format_collected_age(max(ages))
+    options_count = len(valid)
 
     # Distinct airlines found, full names, cheapest-first.
     seen, airlines = set(), []
@@ -165,10 +179,13 @@ def render_search_summary(deals: list[dict], rec: dict | None, *, route: str, pr
         ("Rota", route or "—"),
         ("Menor preço", format_brl(price)),
         ("Milhas estimadas", format_miles(miles)),
-        ("Melhor companhia", best_airline),
+        ("Melhor companhia", f'{best_logo}{best_airline}'),
+        ("Opções encontradas", str(options_count)),
         ("Fonte", provider),
         ("Recomendação", f"{emoji} {recommendation}"),
     ]
+    if recent_age:
+        rows.append(("Cotação mais recente", recent_age))
     if total_time:
         rows.append(("Tempo da busca (API)", total_time))
     rows_html = "".join(f'<div class="summary-row"><span>{k}</span><b>{v}</b></div>' for k, v in rows)

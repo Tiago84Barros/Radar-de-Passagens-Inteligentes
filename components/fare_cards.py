@@ -154,3 +154,39 @@ def render_fare_cards(deals: list[dict], per_row: int = 3) -> None:
         "* Milhas estimadas (R$ 0,035/milha). A disponibilidade real depende do "
         "programa de fidelidade."
     )
+
+
+def render_fare_variants(variants: list[dict], per_row: int = 3) -> None:
+    """Render the "Opções encontradas" section: up to N diversified fare variants
+    (already chosen by ``select_fare_variants``), each with airline logo + full
+    name, price, miles, total time, stops, dates, source and buy link. The
+    cheapest is highlighted."""
+    st.markdown(
+        '<div class="deals-section-header">🧭 Opções encontradas</div>',
+        unsafe_allow_html=True,
+    )
+    if not variants:
+        st.markdown(
+            '<div class="dados-ausentes">📭 <strong>Sem opções para esta rota</strong><br>'
+            '<span>A busca não retornou tarifas. Tente outras datas.</span></div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    st.markdown(
+        '<p class="deals-section-subtitle">Até 3 variantes, priorizando preço e tempos de '
+        'viagem diferentes (preferência por trajetos abaixo de 12h).</p>',
+        unsafe_allow_html=True,
+    )
+
+    cheapest_price = min(float(d.get("price_brl") or 0) for d in variants if (d.get("price_brl") or 0) > 0)
+    cards = [_fare_card_html(d, float(d.get("price_brl") or 0) == cheapest_price) for d in variants]
+    per_row = max(1, min(per_row, len(cards)))
+    st.markdown(
+        f'<div class="fare-cards-grid" style="grid-template-columns:repeat({per_row},1fr);">'
+        f'{"".join(cards)}</div>',
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        "* Milhas estimadas (R$ 0,035/milha). A disponibilidade real depende do programa de fidelidade."
+    )

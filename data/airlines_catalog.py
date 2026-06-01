@@ -58,6 +58,71 @@ _SHORT_NAMES: dict[str, str] = {
 _NAME_TO_FULL: dict[str, str] = {name.lower(): name for name in AIRLINES.values()}
 _NAME_TO_FULL.update(_SHORT_NAMES)
 
+# Optional metadata (alliance / country) for the richer get_airline_info().
+_AIRLINE_META: dict[str, dict] = {
+    "AD": {"alliance": None, "country": "Brasil"},
+    "G3": {"alliance": None, "country": "Brasil"},
+    "LA": {"alliance": "oneworld", "country": "Chile"},
+    "JJ": {"alliance": "oneworld", "country": "Brasil"},
+    "TP": {"alliance": "Star Alliance", "country": "Portugal"},
+    "AV": {"alliance": "Star Alliance", "country": "Colômbia"},
+    "CM": {"alliance": "Star Alliance", "country": "Panamá"},
+    "AA": {"alliance": "oneworld", "country": "EUA"},
+    "DL": {"alliance": "SkyTeam", "country": "EUA"},
+    "UA": {"alliance": "Star Alliance", "country": "EUA"},
+    "IB": {"alliance": "oneworld", "country": "Espanha"},
+    "AF": {"alliance": "SkyTeam", "country": "França"},
+    "KL": {"alliance": "SkyTeam", "country": "Holanda"},
+    "UX": {"alliance": "SkyTeam", "country": "Espanha"},
+    "EK": {"alliance": None, "country": "Emirados Árabes"},
+    "QR": {"alliance": "oneworld", "country": "Catar"},
+    "BA": {"alliance": "oneworld", "country": "Reino Unido"},
+    "AR": {"alliance": "SkyTeam", "country": "Argentina"},
+}
+
+
+def _code_for(raw: str) -> str | None:
+    """Resolve an IATA code from a code or name, if possible."""
+    up = (raw or "").strip().upper()
+    if up in AIRLINES:
+        return up
+    low = (raw or "").strip().lower()
+    full = _NAME_TO_FULL.get(low)
+    if not full:
+        for key, f in _NAME_TO_FULL.items():
+            if key and key in low:
+                full = f
+                break
+    if full:
+        for code, name in AIRLINES.items():
+            if name == full:
+                return code
+    return None
+
+
+def logo_url_for(code: str | None) -> str:
+    """CDN logo URL for an IATA code (avs.io). Empty string when unknown."""
+    code = (code or "").strip().upper()
+    if not code or code not in AIRLINES:
+        return ""
+    return f"https://pics.avs.io/200/80/{code}.png"
+
+
+def get_airline_info(code_or_name: str | None) -> dict:
+    """Return ``{"code", "name", "logo_url", "alliance", "country"}`` for an
+    airline code or name. Unknown/empty inputs still return a safe dict with the
+    full/cleaned name and an empty ``logo_url`` (the UI shows a plane fallback)."""
+    name = get_airline_name(code_or_name)
+    code = _code_for(code_or_name or "")
+    meta = _AIRLINE_META.get(code or "", {})
+    return {
+        "code": code or "",
+        "name": name,
+        "logo_url": logo_url_for(code),
+        "alliance": meta.get("alliance"),
+        "country": meta.get("country"),
+    }
+
 _UNKNOWN = "Companhia não identificada"
 _MISSING = "Companhia não informada"
 
@@ -100,4 +165,4 @@ def get_airline_name(code_or_name: str | None) -> str:
     return raw
 
 
-__all__ = ["AIRLINES", "get_airline_name"]
+__all__ = ["AIRLINES", "get_airline_name", "get_airline_info", "logo_url_for"]

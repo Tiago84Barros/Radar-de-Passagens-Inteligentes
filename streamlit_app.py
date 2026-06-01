@@ -25,7 +25,7 @@ from app.settings import get_settings
 from app.styles import load_custom_css
 from components.cards import render_airline_comparison, render_deal_cards_section, render_origin_card
 from components.airport_cards import render_airport_cards
-from components.fare_cards import render_fare_cards
+from components.fare_cards import render_fare_cards, render_fare_variants
 from components.charts import render_current_prices_bar, render_future_projection
 from components.monitor_prompt import render_monitor_prompt
 from components.decision_cards import (
@@ -64,6 +64,7 @@ from services.opportunity_service import (
     get_home_deals,
     get_international_lowest,
     get_national_lowest,
+    select_fare_variants,
 )
 
 
@@ -777,8 +778,11 @@ def render_sidebar(summary: dict, provider_status: dict[str, Any], db_connected:
                 value=bool(settings.telegram_bot_token and settings.telegram_chat_id),
             )
 
-            search_now = st.form_submit_button("🔍 Buscar agora", use_container_width=True)
-            start_monitoring = st.form_submit_button("🛰️ Iniciar monitoramento", type="primary", use_container_width=True)
+            search_now = st.form_submit_button("🔍 Buscar agora", type="primary", use_container_width=True)
+            # "Iniciar monitoramento" saiu da sidebar: o monitoramento agora é
+            # oferecido na área principal, após uma busca bem-sucedida
+            # (botão "Monitorar esta rota 24h").
+            start_monitoring = False
 
         # Internal defaults for fields removed from the sidebar (kept in state so
         # the rest of the flow and the worker keep working unchanged).
@@ -946,10 +950,6 @@ def render_sidebar(summary: dict, provider_status: dict[str, Any], db_connected:
                     unsafe_allow_html=True,
                 )
 
-        if st.button("▶️ Rodar buscas devidas agora", use_container_width=True):
-            result = run_due_searches(force=False)
-            st.success(f"{result['searches_checked']} buscas checadas; {result['quotes_saved']} cotações salvas.")
-            st.rerun()
 
 
 # ─── Tab: Início ──────────────────────────────────────────────────────────────
@@ -1158,48 +1158,40 @@ def _render_home_route(summary: dict, df_quotes: pd.DataFrame, provider_status: 
     max_price = prefs.get("max_price")
 
     if not origin_code:
-        _empty_state("🧭 Escolha uma origem e uma estratégia de busca na lateral.")
+        _empty_state("🧭 Escolha origem, destino e datas na lateral. "
+                     "Depois clique em <strong>Buscar agora</strong>.")
         return
 
     render_airport_cards(origin_code, dest_code or None)
 
     if not dest_code:
-        _empty_state("📍 Agora escolha o destino para comparar oportunidades.")
+        _empty_state("📍 Agora escolha o destino. Depois clique em <strong>Buscar agora</strong>.")
+        return
+
+    # Results appear ONLY after the user explicitly clicked "Buscar agora" for
+    # THIS route in this session (search_progress is set only in the submit
+    # handler). Selecting origin/destination never triggers a search.
+    progress = st.session_state.get("search_progress")
+    executed = bool(
+        progress
+        and progress.get("origin_code") == origin_code
+        and progress.get("destination_code") == dest_code
+    )
+    if not executed:
+        _empty_state("🔍 Tudo pronto. Clique em <strong>Buscar agora</strong> "
+                     "para consultar as melhores tarifas desta rota.")
         return
 
     last_ctx = st.session_state.get("last_route_context") or {}
-    searched = (
-        str(last_ctx.get("origin_code") or "").upper() == origin_code
-        and str(last_ctx.get("destination_code") or "").upper() == dest_code
-    )
-    deals_any = get_airline_comparison(df_quotes, origin_code, dest_code)
+    # Most recent fares for the route (no time-window filter — we always show the
+    # latest available quote, not collection history).
+    deals = get_airline_comparison(df_quotes, origin_code, dest_code)
 
-    if not searched and not deals_any:
-        _empty_state("🔍 Clique em <strong>Buscar agora</strong> para consultar as melhores tarifas.")
-        return
-
-    st.divider()
-
-    # Validity window: airfares expire fast, so we only surface recent fares.
-    window_label = st.radio(
-        "Mostrar tarifas coletadas nas últimas:",
-        list(FARE_WINDOW_OPTIONS.keys()),
-        index=FARE_WINDOW_DEFAULT_INDEX,
-        horizontal=True,
-        key="fare_window",
-        help="As tarifas expiram rápido. Esta janela esconde preços antigos. "
-        "O histórico completo fica na aba Histórico técnico.",
-    )
-    deals = get_airline_comparison(
-        df_quotes, origin_code, dest_code, max_age_hours=FARE_WINDOW_OPTIONS[window_label]
-    )
-
-    if deals_any and not deals:
-        _empty_state(
-            "⏳ Nenhuma tarifa coletada nesta janela de tempo. As tarifas mais "
-            "recentes podem ter expirado — amplie a janela ou clique em "
-            "<strong>Buscar agora</strong> para atualizar os preços."
-        )
+    if not deals:
+        _empty_state("📭 A busca foi executada, mas ainda não há tarifas reais para esta rota. "
+                     "Tente novamente em alguns instantes ou ajuste as datas.")
+        st.divider()
+        render_monitor_prompt(_home_route_dict(origin_code, dest_code, last_ctx))
         return
 
     # ── Decision: the protagonist of the screen ───────────────────────────────
@@ -1216,29 +1208,25 @@ def _render_home_route(summary: dict, df_quotes: pd.DataFrame, provider_status: 
     )
 
     # Search resumo card (route, cheapest, miles, airlines found, worker status).
-    progress = st.session_state.get("search_progress")
-    if not (progress and progress.get("origin_code") == origin_code
-            and progress.get("destination_code") == dest_code):
-        progress = None
     render_search_summary(deals, rec, route=f"{origin_code} → {dest_code}", progress=progress)
 
     # Execution progress: immediate API vs complementary GitHub Actions worker.
-    if progress:
-        st.divider()
-        render_execution_progress(progress)
+    st.divider()
+    render_execution_progress(progress)
+
+    # "Opções encontradas": at least 3 diversified fare variants.
+    st.divider()
+    variants = select_fare_variants(deals, max_variants=3)
+    render_fare_variants(variants)
 
     st.divider()
     render_decision_summary(rec, consider_miles=consider_miles)
-
-    # Per-airline fares (supporting detail).
-    st.divider()
-    render_fare_cards(deals)
 
     if deals:
         st.divider()
         render_current_prices_bar(deals)
 
-    # "Monitorar esta rota 24h" with keep/replace/cancel conflict handling.
+    # "Monitorar esta rota 24h" — offered in the main area as a result of the search.
     st.divider()
     render_monitor_prompt(_home_route_dict(origin_code, dest_code, last_ctx))
 
@@ -1253,53 +1241,35 @@ def _render_home_multi(summary: dict, df_quotes: pd.DataFrame, prefs: dict) -> N
     min_mile_value = float(prefs.get("min_mile_value") or DEFAULT_CENTS_PER_MILE)
     max_price = prefs.get("max_price")
 
-    # Global decision radar overview (answers melhor preço / destino / milhas).
-    render_radar_overview(_radar_overview_metrics(summary, df_quotes, prefs))
-    st.divider()
-
     if not origin_code:
-        _empty_state("🧭 Escolha uma origem na lateral e clique em <strong>Buscar agora</strong> "
-                     "para encontrar os destinos mais baratos.")
+        _empty_state("🧭 Escolha uma origem na lateral (e regiões, se quiser). "
+                     "Depois clique em <strong>Buscar agora</strong>.")
         return
 
     render_airport_cards(origin_code, None)
 
-    # Eligible destinations from the geographic filter (in front of the engine).
+    # Results appear ONLY after an explicit multi-destination search for this
+    # origin (multi_results/multi_context are set only in the submit handler).
+    results = st.session_state.get("multi_results")
+    ctx = st.session_state.get("multi_context") or {}
+    same_origin = str(ctx.get("origin_code") or "").upper() == origin_code
+    if not (results and same_origin):
+        _empty_state("🔍 Tudo pronto. Clique em <strong>Buscar agora</strong> para varrer "
+                     "os destinos mais baratos a partir desta origem.")
+        return
+
+    # Global decision radar overview (melhor preço / destino / milhas).
+    render_radar_overview(_radar_overview_metrics(summary, df_quotes, prefs))
+
+    # Applied-filter summary + eligible-airport count.
     candidates = get_destination_iatas_for_filters(
         area_scope, brazil_regions, international_regions, origin=origin_code
     )
-    if not candidates:
-        _empty_state("🚫 Nenhum destino elegível encontrado para os filtros selecionados.")
-        return
-
-    # Applied-filter summary + eligible-airport count (spec §6).
     st.markdown(
         f'<div class="filter-summary">🧭 {describe_filters(area_scope, brazil_regions, international_regions)}'
         f'<span class="filter-count">{len(candidates)} aeroportos no radar.</span></div>',
         unsafe_allow_html=True,
     )
-
-    results = st.session_state.get("multi_results")
-    ctx = st.session_state.get("multi_context") or {}
-    same_origin = str(ctx.get("origin_code") or "").upper() == origin_code
-
-    # Fall back to ranking the DB-collected destinations when there's no live
-    # sweep yet (preserved get_home_deals engine via the adapter), now restricted
-    # to the eligible airports.
-    if not (results and same_origin):
-        ranked = find_cheapest_destinations(
-            df_quotes, origin=origin_code, scope=scope, limit=6, fill_demo=True,
-            search_params={"max_price": max_price, "consider_miles": prefs.get("consider_miles", True),
-                           "user_min_mile_value": min_mile_value},
-            min_mile_value=min_mile_value,
-            candidate_iatas=candidates,
-        )
-        results = {"national": ranked.get("national", []), "international": ranked.get("international", [])}
-        if not any(results.values()):
-            _empty_state("🔍 Clique em <strong>Buscar agora</strong> para varrer os destinos "
-                         "mais baratos a partir desta origem.")
-            return
-        st.caption("Mostrando destinos mais baratos já coletados. Clique em Buscar agora para uma varredura ao vivo.")
 
     st.markdown('<div class="deals-section-header">🧳 Destinos mais baratos encontrados</div>',
                 unsafe_allow_html=True)
@@ -2039,31 +2009,16 @@ def main() -> None:
     df_quotes = load_quotes_df(_data_version())
     real_df_quotes = filter_real_quotes_df(df_quotes)
 
-    (
-        tab_home,
-        tab_opportunities,
-        tab_control,
-        tab_history,
-        tab_miles,
-        tab_settings,
-    ) = st.tabs(["🏠 Início", "🎯 Oportunidades", "🛰️ Controle de Buscas", "📈 Histórico técnico", "🏆 Milhas", "⚙️ Configurações"])
+    # Navegação simplificada (Histórico técnico, Oportunidades e Milhas saíram).
+    tab_home, tab_control, tab_settings = st.tabs(
+        ["🏠 Início", "🛰️ Controle de Buscas", "⚙️ Configurações"]
+    )
 
     with tab_home:
         render_home_tab(summary, real_df_quotes, provider_status)
 
-    with tab_opportunities:
-        render_opportunities(real_df_quotes)
-
     with tab_control:
         render_search_control(summary, real_df_quotes)
-
-    with tab_history:
-        render_year_price_calendar(summary, real_df_quotes)
-        st.divider()
-        render_history(real_df_quotes)
-
-    with tab_miles:
-        render_miles_tab(real_df_quotes)
 
     with tab_settings:
         render_settings(provider_status, db_connected)

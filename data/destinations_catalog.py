@@ -357,6 +357,15 @@ DESTINATIONS: dict[str, dict] = {
         "postcard_label": "Walt Disney World, Orlando",
         "gradient": _INTL_GRADIENT,
     },
+    "NYC": {
+        "city": "Nova York",
+        "country": "EUA",
+        "iata": "NYC",
+        "category": "international",
+        "image_url": "https://images.unsplash.com/photo-1496442226666-8d4d0e62e6e9?w=640&q=80&auto=format&fit=crop",
+        "postcard_label": "Skyline de Nova York",
+        "gradient": _INTL_GRADIENT,
+    },
     "JFK": {
         "city": "Nova York",
         "country": "EUA",
@@ -519,12 +528,68 @@ _FALLBACK_INTL_IMAGES: tuple[str, ...] = (
 
 
 def _fallback_image(iata: str, is_national: bool) -> str:
-    """Pick a stable generic travel photo for an uncatalogued destination."""
-    pool = _FALLBACK_NATIONAL_IMAGES if is_national else _FALLBACK_INTL_IMAGES
-    if not iata:
-        return pool[0]
-    idx = sum(ord(c) for c in iata) % len(pool)
-    return pool[idx]
+    """Pick a stable generic travel photo for an uncatalogued destination.
+
+    Uses a deterministic, always-available source (picsum.photos seeded by the
+    code) so a postcard image renders even when nothing is catalogued."""
+    import re
+
+    seed = (iata or ("brasil" if is_national else "mundo")).lower()
+    seed = re.sub(r"[^a-z0-9]+", "-", seed).strip("-") or "destino"
+    return f"https://picsum.photos/seed/radar-{seed}/640/360"
+
+
+def _strip_accents(value: str) -> str:
+    import unicodedata
+
+    return "".join(c for c in unicodedata.normalize("NFD", value) if unicodedata.category(c) != "Mn")
+
+
+def _normalize(value: str) -> str:
+    return _strip_accents((value or "").strip().lower())
+
+
+# Normalised city name → IATA, built from the catalog (first match wins) plus a
+# few common aliases, so matching by city tolerates accents and case.
+_CITY_TO_IATA: dict[str, str] = {}
+for _code, _info in DESTINATIONS.items():
+    _key = _normalize(_info.get("city", ""))
+    if _key:
+        _CITY_TO_IATA.setdefault(_key, _code)
+_CITY_TO_IATA.update({
+    "nova york": "NYC", "nova iorque": "NYC", "new york": "NYC",
+    "sao paulo": "GRU", "rio de janeiro": "GIG", "brasilia": "BSB",
+    "belem": "BEL", "lisboa": "LIS", "paris": "CDG", "londres": "LHR",
+    "madri": "MAD", "madrid": "MAD", "buenos aires": "EZE", "santiago": "SCL",
+})
+
+
+def get_destination_image(iata: str | None = None, city: str | None = None, country: str | None = None) -> dict:
+    """Resolve a postcard image with graceful fallback.
+
+    Priority: (1) IATA in catalog → (2) normalised city name → (3) country/region
+    fallback → (4) generic fallback. Returns
+    ``{"url", "is_fallback", "postcard_label"}``; ``is_fallback`` is True whenever
+    the image is generic rather than a specific city photo, so the card can mark
+    it as illustrative."""
+    code = (iata or "").upper().strip()
+    if code and code in DESTINATIONS:
+        info = DESTINATIONS[code]
+        return {"url": info["image_url"], "is_fallback": False, "postcard_label": info.get("postcard_label", code)}
+
+    if city:
+        mapped = _CITY_TO_IATA.get(_normalize(city))
+        if mapped and mapped in DESTINATIONS:
+            info = DESTINATIONS[mapped]
+            return {"url": info["image_url"], "is_fallback": False, "postcard_label": info.get("postcard_label", mapped)}
+
+    # Country/region fallback (still generic → mark as fallback).
+    is_national = code in BRAZIL_IATAS or _normalize(country or "") in {"brasil", "brazil"}
+    return {
+        "url": _fallback_image(code or _normalize(city or ""), is_national),
+        "is_fallback": True,
+        "postcard_label": (city or code or "Destino"),
+    }
 
 
 def get_destination_info(iata: str) -> dict:
@@ -535,15 +600,18 @@ def get_destination_info(iata: str) -> dict:
     if iata in DESTINATIONS:
         info = dict(DESTINATIONS[iata])
         info.setdefault("airport_name", AIRPORT_NAMES.get(iata, ""))
+        info["image_is_fallback"] = False
         return info
     is_national = iata in BRAZIL_IATAS
+    img = get_destination_image(iata=iata, country="Brasil" if is_national else None)
     return {
         "city": iata,
         "country": "Brasil" if is_national else "Internacional",
         "iata": iata,
         "airport_name": AIRPORT_NAMES.get(iata, ""),
         "category": "national" if is_national else "international",
-        "image_url": _fallback_image(iata, is_national),
+        "image_url": img["url"],
+        "image_is_fallback": True,
         "postcard_label": iata,
         "gradient": _NATIONAL_GRADIENT if is_national else _INTL_GRADIENT,
     }

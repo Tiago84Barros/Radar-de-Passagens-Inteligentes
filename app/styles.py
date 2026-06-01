@@ -1022,6 +1022,12 @@ a.buy-link {
     margin-bottom: auto;
     backdrop-filter: blur(3px);
 }
+.airport-card-fallback {
+    position: absolute; top: 14px; right: 14px;
+    font-size: .66rem; font-weight: 700; color: #e5edf8;
+    background: rgba(15,23,42,.6); padding: 2px 8px; border-radius: 999px;
+    backdrop-filter: blur(3px);
+}
 .badge-origin { background: rgba(45,212,191,.85); color: #06241f; }
 .badge-dest   { background: rgba(251,191,36,.88); color: #2a1c00; }
 .airport-card-code {
@@ -1186,6 +1192,7 @@ a.buy-link {
     border-bottom: 1px dashed rgba(148,163,184,.12); font-size: .94rem; }
 .summary-row span { color: var(--radar-muted); }
 .summary-row b { color: var(--radar-ink); font-weight: 800; }
+.summary-logo { height: 18px; vertical-align: middle; margin-right: 6px; border-radius: 3px; background:#fff; padding:1px 3px; }
 .summary-airlines { margin-top: 10px; font-size: .9rem; color: var(--radar-ink); }
 .summary-airlines span { color: var(--radar-muted); }
 

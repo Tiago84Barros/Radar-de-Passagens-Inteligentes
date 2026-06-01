@@ -233,6 +233,75 @@ def get_airline_comparison(
     return deals
 
 
+def select_fare_variants(
+    quotes: list[dict],
+    max_variants: int = 3,
+    preferred_max_duration_hours: int = 12,
+) -> list[dict]:
+    """Pick up to ``max_variants`` fare options to show under "Opções encontradas".
+
+    - always keeps the cheapest fare;
+    - removes near-duplicates (same airline, price within ~3% and similar duration);
+    - diversifies by airline and travel time, preferring trips under
+      ``preferred_max_duration_hours`` (falls back to the best available if there
+      aren't enough short ones);
+    - tolerates missing ``duration_minutes`` (the card shows "tempo não informado").
+
+    Returns the selected deals ordered by price (cheapest first)."""
+    cap_minutes = preferred_max_duration_hours * 60
+
+    def _price(q: dict) -> float:
+        try:
+            return float(q.get("price_brl") or q.get("preço") or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _dur(q: dict) -> int | None:
+        d = q.get("duration_minutes")
+        try:
+            return int(d) if d else None
+        except (TypeError, ValueError):
+            return None
+
+    def _air(q: dict) -> str:
+        return str(q.get("airline") or "").strip().upper()
+
+    valid = [q for q in (quotes or []) if _price(q) > 0]
+    if not valid:
+        return []
+
+    by_price = sorted(valid, key=_price)
+
+    # De-duplicate near-identical fares (keep the cheapest of each cluster).
+    uniq: list[dict] = []
+    for q in by_price:
+        dup = False
+        for u in uniq:
+            if _air(q) == _air(u) and abs(_price(q) - _price(u)) <= max(_price(u) * 0.03, 1.0):
+                du, dq = _dur(u), _dur(q)
+                if (du is None and dq is None) or (du and dq and abs(du - dq) <= 30):
+                    dup = True
+                    break
+        if not dup:
+            uniq.append(q)
+
+    selected: list[dict] = [uniq[0]]            # cheapest always included
+    remaining = uniq[1:]
+    while len(selected) < max_variants and remaining:
+        chosen_airlines = {_air(s) for s in selected}
+
+        def _rank(q: dict):
+            new_airline = _air(q) not in chosen_airlines
+            under_cap = _dur(q) is not None and _dur(q) <= cap_minutes
+            # False sorts before True, so "not X" puts the preferred ones first.
+            return (not new_airline, not under_cap, _price(q))
+
+        remaining.sort(key=_rank)
+        selected.append(remaining.pop(0))
+
+    return sorted(selected[:max_variants], key=_price)
+
+
 def get_national_lowest(df_quotes: pd.DataFrame) -> float | None:
     """Return the lowest national price from the quotes DataFrame."""
     if df_quotes.empty or "preço" not in df_quotes.columns:
