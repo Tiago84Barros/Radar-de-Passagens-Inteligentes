@@ -363,19 +363,54 @@ def _restore_state_from_query() -> None:
         }
 
 
+def _route_quote_count(origin: str, destination: str) -> int:
+    """Number of quotes stored for a route (used to detect when the worker has
+    written new prices)."""
+    o = (origin or "").upper()
+    d = (destination or "").upper()
+    try:
+        with session_scope() as db:
+            return int(
+                db.scalar(
+                    select(func.count()).select_from(FlightQuote).where(
+                        func.upper(FlightQuote.origin) == o,
+                        func.upper(FlightQuote.destination) == d,
+                    )
+                )
+                or 0
+            )
+    except Exception:
+        return 0
+
+
 def _worker_autorefresh() -> bool:
     """While the GitHub Actions worker is finishing the full scraping, softly
     refresh the page (no browser reload, no login loss) so new prices appear by
-    themselves. Returns True while polling is active."""
+    themselves. Stops EARLY as soon as new prices for the route are detected;
+    the time window is only a safety cap. Returns True while polling is active."""
     until = st.session_state.get("worker_poll_until", 0)
     if not until or time.time() >= until:
         st.session_state.pop("worker_poll_until", None)
         return False
+
+    # Stop the moment the worker has written new quotes for the searched route.
+    route = st.session_state.get("worker_route")
+    baseline = st.session_state.get("worker_baseline_count")
+    if route and baseline is not None:
+        if _route_quote_count(route[0], route[1]) > int(baseline):
+            st.session_state.pop("worker_poll_until", None)
+            st.session_state.pop("worker_route", None)
+            st.session_state.pop("worker_baseline_count", None)
+            st.session_state["worker_done"] = True
+            bump_data_version()  # show the freshly collected prices
+            return False
+
     try:
         from streamlit_autorefresh import st_autorefresh
+
+        count = st_autorefresh(interval=15000, key="worker_autorefresh")
     except Exception:
-        return False
-    count = st_autorefresh(interval=15000, key="worker_autorefresh")
+        return True  # window still active even if the component can't render
     # Refresh the cached quotes once per tick so the worker's new rows show.
     if st.session_state.get("_worker_tick") != count:
         st.session_state["_worker_tick"] = count
@@ -996,9 +1031,15 @@ def render_sidebar(summary: dict, provider_status: dict[str, Any], db_connected:
                 _persist_route_search(origin_location, destination_location)
 
                 # Auto-refresh the page while the GitHub Actions worker finishes the
-                # full scraping, so new prices appear without a manual reload.
+                # full scraping, so new prices appear without a manual reload. The
+                # baseline quote count lets the refresh STOP as soon as the worker
+                # writes new prices for this route (time window is just a safety cap).
                 if worker_status in {"queued", "in_progress"}:
-                    st.session_state["worker_poll_until"] = _time.time() + 210
+                    o_code = origin_location.code.upper()
+                    d_code = destination_location.code.upper()
+                    st.session_state["worker_poll_until"] = _time.time() + 300
+                    st.session_state["worker_route"] = (o_code, d_code)
+                    st.session_state["worker_baseline_count"] = _route_quote_count(o_code, d_code)
 
                 # Persist feedback across the rerun below (messages set here would
                 # otherwise be wiped by st.rerun()).
@@ -2127,9 +2168,11 @@ def main() -> None:
     render_sidebar(summary, provider_status, db_connected)
     render_header(provider_status, summary.get("latest_provider_log"))
 
-    if worker_polling:
+    if st.session_state.pop("worker_done", False):
+        st.success("✅ Novos preços coletados pelo GitHub Actions. Atualização automática encerrada.")
+    elif worker_polling:
         st.info("🔄 Atualizando automaticamente enquanto o GitHub Actions coleta os preços "
-                "de todas as companhias… os resultados aparecem sozinhos.")
+                "de todas as companhias… para sozinho assim que os preços novos chegarem.")
 
     df_quotes = load_quotes_df(_data_version())
     real_df_quotes = filter_real_quotes_df(df_quotes)
