@@ -141,6 +141,18 @@ def test_telegram_enabled_allows_alerts(fresh_db):
         assert _alert_count(s, sid) > 0, "alerts should be logged when telegram is on"
 
 
+def test_bulk_pause_resume_delete(fresh_db):
+    db, ms, scs = fresh_db
+    ids = [_make_search(db, ms) for _ in range(3)]
+    assert scs.bulk_pause(ids) == 3
+    assert _eligible_ids(db, ms) == set()                 # all paused → worker ignores
+    assert scs.bulk_resume(ids[:2]) == 2
+    assert _eligible_ids(db, ms) == set(ids[:2])          # only the two reactivated run
+    assert scs.bulk_delete(ids) == 3
+    remaining = {x.id for x in scs.list_searches()}
+    assert remaining.isdisjoint(ids)                      # all soft-deleted/hidden
+
+
 def test_duplicate_creates_new_active(fresh_db):
     db, ms, scs = fresh_db
     sid = _make_search(db, ms, destination="ANYWHERE", search_type="multi",

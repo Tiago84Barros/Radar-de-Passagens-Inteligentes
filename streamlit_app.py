@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from datetime import date, timedelta
 from typing import Any
 
@@ -125,11 +126,24 @@ TRAVEL_WINDOW_OPTIONS = {
 
 # ─── Auth ─────────────────────────────────────────────────────────────────────
 
+def _auth_token(password: str) -> str:
+    """Non-reversible token stored in the URL so a manual reload keeps the user
+    logged in (session_state is wiped on a hard refresh)."""
+    import hashlib
+
+    return hashlib.sha256(f"radar::{password}".encode()).hexdigest()[:32]
+
+
 def require_password() -> None:
     settings = get_settings()
     if not settings.app_password:
         return
+    token = _auth_token(settings.app_password)
     if st.session_state.get("authenticated"):
+        return
+    # Restore the session from the URL token after a hard reload (no re-login).
+    if st.query_params.get("k") == token:
+        st.session_state["authenticated"] = True
         return
     load_custom_css()
 
@@ -161,6 +175,8 @@ def require_password() -> None:
         if submitted:
             if password == settings.app_password:
                 st.session_state["authenticated"] = True
+                # Persist auth in the URL so a reload doesn't drop back to login.
+                st.query_params["k"] = token
                 st.rerun()
             st.error("Senha inválida. Verifique e tente novamente.")
         st.markdown(
@@ -310,6 +326,61 @@ def _data_version() -> int:
 
 def bump_data_version() -> None:
     st.session_state["data_version"] = _data_version() + 1
+
+
+def _persist_route_search(origin, destination) -> None:
+    """Save the executed route search in the URL so a hard reload restores the
+    origin/destination cards and the results instead of losing everything."""
+    try:
+        st.query_params["o"] = origin.code
+        st.query_params["d"] = destination.code
+        st.query_params["ol"] = origin.label
+        st.query_params["dl"] = destination.label
+    except Exception:
+        pass
+
+
+def _restore_state_from_query() -> None:
+    """On a fresh session (e.g. after a hard reload), rebuild the selected route
+    and a minimal 'executed search' marker from the URL, so the Home tab shows the
+    cards + results again. Reads the DB-backed quotes for the actual prices."""
+    qp = st.query_params
+    o = (qp.get("o") or "").upper().strip()
+    d = (qp.get("d") or "").upper().strip()
+    if not o or not d:
+        return
+    if not st.session_state.get("home_origin"):
+        st.session_state["home_origin"] = {"code": o, "label": qp.get("ol") or o}
+    if not st.session_state.get("home_destination"):
+        st.session_state["home_destination"] = {"code": d, "label": qp.get("dl") or d}
+    st.session_state.setdefault("search_mode", SEARCH_MODE_ROUTE)
+    # Minimal progress marker (restored=True) so the gating passes and results
+    # render from the DB; the timing panel is skipped for a restored search.
+    if not st.session_state.get("search_progress"):
+        st.session_state["search_progress"] = {
+            "origin_code": o, "destination_code": d, "route": f"{o} → {d}",
+            "mode": "route", "restored": True,
+        }
+
+
+def _worker_autorefresh() -> bool:
+    """While the GitHub Actions worker is finishing the full scraping, softly
+    refresh the page (no browser reload, no login loss) so new prices appear by
+    themselves. Returns True while polling is active."""
+    until = st.session_state.get("worker_poll_until", 0)
+    if not until or time.time() >= until:
+        st.session_state.pop("worker_poll_until", None)
+        return False
+    try:
+        from streamlit_autorefresh import st_autorefresh
+    except Exception:
+        return False
+    count = st_autorefresh(interval=15000, key="worker_autorefresh")
+    # Refresh the cached quotes once per tick so the worker's new rows show.
+    if st.session_state.get("_worker_tick") != count:
+        st.session_state["_worker_tick"] = count
+        bump_data_version()
+    return True
 
 
 def load_summary() -> dict:
@@ -920,6 +991,15 @@ def render_sidebar(summary: dict, provider_status: dict[str, Any], db_connected:
                     "mode": "route",
                 }
 
+                # Persist the executed search in the URL so a manual reload keeps
+                # the cards + results (session_state is wiped on a hard refresh).
+                _persist_route_search(origin_location, destination_location)
+
+                # Auto-refresh the page while the GitHub Actions worker finishes the
+                # full scraping, so new prices appear without a manual reload.
+                if worker_status in {"queued", "in_progress"}:
+                    st.session_state["worker_poll_until"] = _time.time() + 210
+
                 # Persist feedback across the rerun below (messages set here would
                 # otherwise be wiped by st.rerun()).
                 st.session_state["last_search_feedback"] = {"text": save_msg, "level": "success"}
@@ -1211,8 +1291,10 @@ def _render_home_route(summary: dict, df_quotes: pd.DataFrame, provider_status: 
     render_search_summary(deals, rec, route=f"{origin_code} → {dest_code}", progress=progress)
 
     # Execution progress: immediate API vs complementary GitHub Actions worker.
-    st.divider()
-    render_execution_progress(progress)
+    # Skipped for a search restored from the URL after a reload (no timing data).
+    if not progress.get("restored"):
+        st.divider()
+        render_execution_progress(progress)
 
     # "Opções encontradas": at least 3 diversified fare variants.
     st.divider()
@@ -1445,6 +1527,9 @@ def render_search_control(summary: dict, df_quotes: pd.DataFrame) -> None:
     from services.search_control_service import (
         alert_counts,
         alerts_for_search,
+        bulk_delete,
+        bulk_pause,
+        bulk_resume,
         delete_search,
         duplicate_search,
         get_action_logs,
@@ -1562,6 +1647,36 @@ def render_search_control(summary: dict, df_quotes: pd.DataFrame) -> None:
         })
     st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
     st.caption("O worker executa apenas buscas com status **Ativa** e data não expirada.")
+
+    # ── Bulk actions (multiple searches at once) ──────────────────────────────
+    with st.expander("☑️ Ações em massa (várias buscas)", expanded=False):
+        bulk_snap = {s.id: s for s in filtered}
+        bulk_ids = st.multiselect(
+            "Selecionar buscas (IDs)",
+            list(bulk_snap.keys()),
+            format_func=lambda i: f"#{i} · {bulk_snap[i].origin}→{bulk_snap[i].destination} ({_ctrl_status_label(bulk_snap[i])})",
+            key="ctrl_bulk_ids",
+        )
+        bcol = st.columns(3)
+        if bcol[0].button("⏸️ Pausar selecionadas", key="ctrl_bulk_pause",
+                          use_container_width=True, disabled=not bulk_ids):
+            n = bulk_pause(bulk_ids)
+            st.session_state["ctrl_feedback"] = {"level": "success", "text": f"{n} busca(s) pausada(s)."}
+            st.rerun()
+        if bcol[1].button("▶️ Reativar selecionadas", key="ctrl_bulk_resume",
+                          use_container_width=True, disabled=not bulk_ids):
+            n = bulk_resume(bulk_ids)
+            st.session_state["ctrl_feedback"] = {"level": "success", "text": f"{n} busca(s) reativada(s)."}
+            st.rerun()
+        confirm_bulk = st.checkbox(
+            "Confirmo que desejo deletar as buscas selecionadas (soft delete).",
+            key="ctrl_bulk_del_confirm",
+        )
+        if bcol[2].button("🗑️ Deletar selecionadas", key="ctrl_bulk_delete",
+                          use_container_width=True, disabled=not (bulk_ids and confirm_bulk)):
+            n = bulk_delete(bulk_ids)
+            st.session_state["ctrl_feedback"] = {"level": "success", "text": f"{n} busca(s) deletada(s)."}
+            st.rerun()
 
     # ── Selected-search action panel ──────────────────────────────────────────
     st.markdown("### Ações da busca selecionada")
@@ -2002,9 +2117,19 @@ def main() -> None:
         st.code(str(exc), language="text")
         st.stop()
 
+    # Restore a previously executed search from the URL (survives hard reload).
+    _restore_state_from_query()
+
+    # Soft auto-refresh while the GitHub Actions worker finishes the full scraping.
+    worker_polling = _worker_autorefresh()
+
     summary = load_summary()
     render_sidebar(summary, provider_status, db_connected)
     render_header(provider_status, summary.get("latest_provider_log"))
+
+    if worker_polling:
+        st.info("🔄 Atualizando automaticamente enquanto o GitHub Actions coleta os preços "
+                "de todas as companhias… os resultados aparecem sozinhos.")
 
     df_quotes = load_quotes_df(_data_version())
     real_df_quotes = filter_real_quotes_df(df_quotes)

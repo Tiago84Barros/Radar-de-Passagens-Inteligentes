@@ -138,6 +138,21 @@ def run_now(search_id: int) -> dict:
         }
 
 
+def bulk_pause(search_ids: list[int]) -> int:
+    """Pause several searches at once. Returns how many were affected."""
+    return sum(1 for sid in search_ids if pause_search(sid))
+
+
+def bulk_resume(search_ids: list[int]) -> int:
+    """Reactivate several searches at once. Returns how many were affected."""
+    return sum(1 for sid in search_ids if resume_search(sid))
+
+
+def bulk_delete(search_ids: list[int]) -> int:
+    """Soft-delete several searches at once. Returns how many were affected."""
+    return sum(1 for sid in search_ids if delete_search(sid))
+
+
 def duplicate_search(search_id: int) -> int | None:
     """Create a new active search with the same parameters (spec §17). Dates are
     copied as-is; the user can adjust them afterwards."""
