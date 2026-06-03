@@ -11,7 +11,7 @@ import streamlit as st
 from sqlalchemy import func, select
 
 from app.deals import calculate_deal_score
-from app.db import AlertLog, FlightQuote, FlightSearch, ProviderLog, database_diagnostics, init_db, session_scope
+from app.db import AlertLog, FlightQuote, FlightSearch, ProviderLog, SourceLog, database_diagnostics, init_db, session_scope
 from app.formatting import format_brl
 from app.location_resolver import LocationResolution, resolve_location
 try:
@@ -2050,6 +2050,81 @@ def render_miles_tab(df: pd.DataFrame) -> None:
 
 # ─── Tab: Configurações ───────────────────────────────────────────────────────
 
+def render_sources_diagnostic() -> None:
+    """Show, from the live database, how many quotes each provider/source saved —
+    so it's clear whether the GitHub Actions scrapers (google_flights/azul/gol/
+    latam) are producing data or only the Travelpayouts API is."""
+    settings = get_settings()
+    st.markdown("**🔎 Diagnóstico de fontes (de onde vêm as cotações)**")
+
+    with session_scope() as db:
+        rows = db.execute(
+            select(
+                FlightQuote.provider,
+                func.count(),
+                func.max(FlightQuote.detected_at),
+            ).group_by(FlightQuote.provider)
+        ).all()
+        active_searches = db.scalar(
+            select(func.count()).select_from(FlightSearch).where(FlightSearch.is_active.is_(True))
+        ) or 0
+        source_logs = list(
+            db.scalars(
+                select(SourceLog).order_by(SourceLog.created_at.desc()).limit(20)
+            )
+        )
+
+    scraper_sources = {"google_flights", "azul", "gol", "latam"}
+    by_provider = {(p or "—"): (int(c), m) for p, c, m in rows}
+    total = sum(c for c, _ in by_provider.values())
+    scraper_total = sum(c for prov, (c, _) in by_provider.items() if prov in scraper_sources)
+
+    if by_provider:
+        prov_df = pd.DataFrame(
+            [
+                {"Fonte/Provider": prov, "Cotações": c,
+                 "Tipo": "Scraping" if prov in scraper_sources else ("API" if "travelpayouts" in prov else "Outro"),
+                 "Última coleta": format_datetime(m)}
+                for prov, (c, m) in sorted(by_provider.items(), key=lambda x: -x[1][0])
+            ]
+        )
+        st.dataframe(prov_df, use_container_width=True, hide_index=True)
+    else:
+        st.info("Nenhuma cotação salva no banco ainda.")
+
+    # Verdict about scraping.
+    if scraper_total > 0:
+        st.success(f"✅ Existem {scraper_total} cotação(ões) vindas de scraping (Google/Azul/GOL/LATAM).")
+    else:
+        st.warning(
+            "⚠️ **Nenhuma cotação de scraping foi salva** — todos os dados vêm da API. "
+            "Causas prováveis (verifique nesta ordem):\n\n"
+            f"1. **`ENABLE_AIRLINE_SCRAPERS`** está como `{settings.enable_airline_scrapers}` aqui. "
+            "Nos *Secrets do GitHub Actions* ele precisa ser exatamente `true`, senão os scrapers "
+            "nem rodam.\n"
+            f"2. **Buscas ativas:** o worker do GitHub Actions só executa buscas com status *Ativa*. "
+            f"Você tem **{active_searches}** ativa(s). Sem nenhuma ativa, o cron não roda nada — "
+            "use **“Monitorar esta rota 24h”** depois de buscar.\n"
+            "3. **Bloqueio anti-bot:** os sites das companhias e o Google Flights costumam bloquear "
+            "os IPs de datacenter do GitHub Actions (captcha/403), então o scraping pode falhar mesmo "
+            "habilitado. Veja os status abaixo."
+        )
+
+    # Recent source logs (scraper run statuses: ok / failed / disabled).
+    if source_logs:
+        with st.expander("📜 Últimos registros de coleta por fonte (source_logs)"):
+            log_df = pd.DataFrame(
+                [
+                    {"Fonte": s.source, "Status": s.status,
+                     "Mensagem": (s.message or "")[:160], "Quando": format_datetime(s.created_at)}
+                    for s in source_logs
+                ]
+            )
+            st.dataframe(log_df, use_container_width=True, hide_index=True)
+
+    st.divider()
+
+
 def render_settings(provider_status: dict[str, Any], db_connected: bool) -> None:
     settings = get_settings()
     st.subheader("Configurações operacionais")
@@ -2115,6 +2190,8 @@ TELEGRAM_CHAT_ID = "seu_chat_id"
 DATABASE_URL = "postgresql://user:pass@host/db" """,
         language="toml",
     )
+    render_sources_diagnostic()
+
     st.markdown("**Diagnóstico do banco**")
     st.json(database_diagnostics())
 
