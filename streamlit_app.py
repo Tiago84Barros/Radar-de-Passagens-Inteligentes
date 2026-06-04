@@ -67,6 +67,7 @@ from services.opportunity_service import (
     get_national_lowest,
     select_fare_variants,
 )
+from components.scraping_tab import render_scraping_tab
 
 
 st.set_page_config(
@@ -1779,6 +1780,14 @@ def render_search_control(summary: dict, df_quotes: pd.DataFrame) -> None:
         st.session_state["ctrl_feedback"] = {"level": "success", "text": f"Busca duplicada como #{new_id}. Ajuste as datas se necessário."}
         st.rerun()
 
+    if st.button("📡 Ver dados de scraping desta busca", key="ctrl_scraping_link", use_container_width=True):
+        st.session_state["scraping_filter_search_id"] = selected_id
+        st.session_state["ctrl_feedback"] = {
+            "level": "info",
+            "text": f"Acesse a aba Radar Scraping para ver as cotações da busca #{selected_id}.",
+        }
+        st.rerun()
+
     # Destructive: delete with confirmation
     with st.expander("🗑️ Deletar busca", expanded=False):
         confirm = st.checkbox("Confirmo que desejo deletar esta busca programada.", key="ctrl_del_confirm")
@@ -2255,8 +2264,8 @@ def main() -> None:
     real_df_quotes = filter_real_quotes_df(df_quotes)
 
     # Navegação simplificada (Histórico técnico, Oportunidades e Milhas saíram).
-    tab_home, tab_control, tab_settings = st.tabs(
-        ["🏠 Início", "🛰️ Controle de Buscas", "⚙️ Configurações"]
+    tab_home, tab_control, tab_scraping, tab_settings = st.tabs(
+        ["🏠 Início", "🛰️ Controle de Buscas", "📡 Radar Scraping", "⚙️ Configurações"]
     )
 
     with tab_home:
@@ -2264,6 +2273,10 @@ def main() -> None:
 
     with tab_control:
         render_search_control(summary, real_df_quotes)
+
+    with tab_scraping:
+        scraping_sid = st.session_state.get("scraping_filter_search_id")
+        render_scraping_tab(search_id_filter=scraping_sid)
 
     with tab_settings:
         render_settings(provider_status, db_connected)
