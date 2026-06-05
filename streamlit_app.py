@@ -253,19 +253,24 @@ def format_date(value: Any) -> str:
 
 
 def get_provider_status(settings) -> dict[str, Any]:
+    amadeus_ok = bool(settings.amadeus_client_id and settings.amadeus_client_secret)
     providers = {
         "Travelpayouts API": bool(settings.travelpayouts_api_token),
+        "Amadeus API": amadeus_ok,
+        "Copa Air scraping": bool(settings.enable_airline_scrapers),
         "Azul scraping": bool(settings.enable_airline_scrapers),
         "GOL scraping": bool(settings.enable_airline_scrapers),
         "LATAM scraping": bool(settings.enable_airline_scrapers),
     }
     active = [name for name, configured in providers.items() if configured]
+    has_real_api = bool(settings.travelpayouts_api_token) or amadeus_ok
     return {
         "providers": providers,
         "active_names": active,
-        "demo_mode": not bool(settings.travelpayouts_api_token),
+        "demo_mode": not has_real_api,
         "provider_label": ", ".join(active) if active else "Nenhuma fonte real configurada",
         "amadeus_env": settings.amadeus_env,
+        "amadeus_configured": amadeus_ok,
     }
 
 
@@ -2083,7 +2088,8 @@ def render_sources_diagnostic() -> None:
             )
         )
 
-    scraper_sources = {"google_flights", "azul", "gol", "latam"}
+    scraper_sources = {"google_flights", "azul", "gol", "latam", "copa_air"}
+    api_sources = {"travelpayouts", "amadeus"}
     by_provider = {(p or "—"): (int(c), m) for p, c, m in rows}
     total = sum(c for c, _ in by_provider.values())
     scraper_total = sum(c for prov, (c, _) in by_provider.items() if prov in scraper_sources)
@@ -2102,8 +2108,9 @@ def render_sources_diagnostic() -> None:
         st.info("Nenhuma cotação salva no banco ainda.")
 
     # Verdict about scraping.
+    amadeus_total = sum(c for prov, (c, _) in by_provider.items() if prov in api_sources and prov != "travelpayouts")
     if scraper_total > 0:
-        st.success(f"✅ Existem {scraper_total} cotação(ões) vindas de scraping (Google/Azul/GOL/LATAM).")
+        st.success(f"✅ Existem {scraper_total} cotação(ões) vindas de scraping (Copa Air/Google/Azul/GOL/LATAM).")
     else:
         st.warning(
             "⚠️ **Nenhuma cotação de scraping foi salva** — todos os dados vêm da API. "
@@ -2113,11 +2120,14 @@ def render_sources_diagnostic() -> None:
             "nem rodam.\n"
             f"2. **Buscas ativas:** o worker do GitHub Actions só executa buscas com status *Ativa*. "
             f"Você tem **{active_searches}** ativa(s). Sem nenhuma ativa, o cron não roda nada — "
-            "use **“Monitorar esta rota 24h”** depois de buscar.\n"
-            "3. **Bloqueio anti-bot:** os sites das companhias e o Google Flights costumam bloquear "
-            "os IPs de datacenter do GitHub Actions (captcha/403), então o scraping pode falhar mesmo "
-            "habilitado. Veja os status abaixo."
+            "use **Monitorar esta rota 24h** depois de buscar.\n"
+            "3. **Bloqueio anti-bot:** Azul/GOL/LATAM/Google bloqueiam IPs de datacenter. "
+            "**Copa Air** tem robots.txt aberto e é a fonte com maior chance de retornar dados.\n"
+            "4. **Amadeus:** configure `AMADEUS_CLIENT_ID` e `AMADEUS_CLIENT_SECRET` nos secrets "
+            "para habilitar a API oficial com 400+ companhias (sandbox gratuito em developers.amadeus.com)."
         )
+    if amadeus_total > 0:
+        st.success(f"✅ {amadeus_total} cotação(ões) da Amadeus API.")
 
     # Recent source logs (scraper run statuses: ok / failed / disabled).
     if source_logs:
@@ -2140,14 +2150,18 @@ def render_settings(provider_status: dict[str, Any], db_connected: bool) -> None
     st.markdown('<p class="section-note">Valores sensíveis não são exibidos. Apenas o status de configuração aparece aqui.</p>', unsafe_allow_html=True)
     db_source = database_diagnostics().get("source")
     database_configured = db_source == "DATABASE_URL"
+    amadeus_configured = bool(settings.amadeus_client_id and settings.amadeus_client_secret)
     provider_rows = [
         {"configuração": "DATABASE_URL", "status": "Configurado" if database_configured else "Não configurado"},
         {"configuração": "TRAVELPAYOUTS_API_TOKEN", "status": "Configurado" if settings.travelpayouts_api_token else "Não configurado"},
-        {"configuração": "ENABLE_AIRLINE_SCRAPERS", "status": "Ativo" if settings.enable_airline_scrapers else "Inativo"},
+        {"configuração": "AMADEUS_CLIENT_ID", "status": "Configurado" if settings.amadeus_client_id else "Não configurado"},
+        {"configuração": "AMADEUS_CLIENT_SECRET", "status": "Configurado" if settings.amadeus_client_secret else "Não configurado"},
+        {"configuração": "AMADEUS_ENV", "status": settings.amadeus_env},
+        {"configuração": "ENABLE_AIRLINE_SCRAPERS", "status": "Ativo (Copa, Azul, GOL, LATAM, Google)" if settings.enable_airline_scrapers else "Inativo"},
         {"configuração": "TELEGRAM_BOT_TOKEN", "status": "Configurado" if settings.telegram_bot_token else "Não configurado"},
         {"configuração": "TELEGRAM_CHAT_ID", "status": "Configurado" if settings.telegram_chat_id else "Não configurado"},
         {"configuração": "Provider ativo", "status": provider_status["provider_label"]},
-        {"configuração": "Modo atual", "status": "Demonstração" if provider_status["demo_mode"] else "Travelpayouts real"},
+        {"configuração": "Modo atual", "status": "Demonstração" if provider_status["demo_mode"] else ("Amadeus + Travelpayouts" if amadeus_configured else "Travelpayouts real")},
         {"configuração": "Banco", "status": "Conectado" if db_connected else "Indisponível"},
     ]
     st.dataframe(pd.DataFrame(provider_rows), use_container_width=True, hide_index=True)

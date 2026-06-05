@@ -5,6 +5,7 @@ from typing import Any
 from app.settings import get_settings
 from scrapers.azul_scraper import AzulScraper
 from scrapers.base_scraper import ScraperError
+from scrapers.copa_scraper import CopaAirScraper
 from scrapers.gol_scraper import GolScraper
 from scrapers.google_flights_scraper import GoogleFlightsScraper
 from scrapers.latam_scraper import LatamScraper
@@ -14,13 +15,20 @@ _LAST_SCRAPER_DIAGNOSTICS: list[dict[str, str]] = []
 
 
 def configured_scrapers() -> list:
-    if not get_settings().enable_airline_scrapers:
+    settings = get_settings()
+    if not settings.enable_airline_scrapers:
         return []
-    # All sources run in the scheduled GitHub Actions monitor: Google Flights
-    # (aggregator) plus each airline site. LATAM has the strongest anti-bot
-    # protection and may fail more often — failures are isolated per scraper
-    # and never break the run.
-    return [GoogleFlightsScraper(), AzulScraper(), GolScraper(), LatamScraper()]
+    # Copa Air has a fully open robots.txt (Allow: /) and serves BEL→MCO via PTY
+    # hub — included by default when scrapers are enabled.
+    # Google Flights, Azul, GOL, LATAM run alongside but may return 0 results
+    # due to anti-bot protection on datacenter IPs.
+    return [
+        CopaAirScraper(),
+        GoogleFlightsScraper(),
+        AzulScraper(),
+        GolScraper(),
+        LatamScraper(),
+    ]
 
 
 def search_all_scrapers(search_params: dict[str, Any]) -> list[dict[str, Any]]:

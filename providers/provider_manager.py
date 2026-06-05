@@ -15,6 +15,26 @@ _LAST_PROVIDER_DIAGNOSTIC: dict[str, Any] = {
 }
 
 
+def _search_amadeus(search_params: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
+    """Call Amadeus if credentials are configured.
+
+    Returns (results, status_message). Failure-safe: returns ([], msg) on any error.
+    """
+    try:
+        from services.amadeus_provider import AmadeusProvider
+        amadeus = AmadeusProvider()
+        if not amadeus.is_configured():
+            return [], "nao_configurado"
+        results = amadeus.search_flights(search_params)
+        for r in results:
+            r.setdefault("source", "amadeus")
+            r.setdefault("provider", "amadeus")
+        msg = f"{len(results)} cotacao(oes) da Amadeus" if results else "Amadeus respondeu sem cotacoes"
+        return results, msg
+    except Exception as exc:  # noqa: BLE001
+        return [], f"erro Amadeus: {str(exc)[:120]}"
+
+
 def search_all_providers(search_params: dict[str, Any]) -> list[dict[str, Any]]:
     """
     Search all providers for a route, including multi-segment connections
@@ -69,18 +89,30 @@ def search_all_providers(search_params: dict[str, Any]) -> list[dict[str, Any]]:
         }
         results.extend(_demo_results(search_params))
 
+    # ── Amadeus (optional, runs alongside TravelPayouts) ──────────────────────
+    amadeus_results, amadeus_msg = _search_amadeus(search_params)
+    results.extend(amadeus_results)
+    if amadeus_results:
+        _LAST_PROVIDER_DIAGNOSTIC["amadeus"] = amadeus_msg
+
     scraper_results = search_all_scrapers(search_params)
     results.extend(scraper_results)
     scraper_diagnostics = get_last_scraper_diagnostics()
-    if scraper_results:
+    if scraper_results or amadeus_results:
         _LAST_PROVIDER_DIAGNOSTIC = {
             "provider": "hybrid",
             "status": "hybrid_ok",
-            "message": f"{len(results)} cotacao(oes) coletadas entre Travelpayouts e scrapers.",
+            "message": (
+                f"{len(results)} cotacao(oes) coletadas entre "
+                f"Travelpayouts, Amadeus e scrapers."
+            ),
             "scrapers": scraper_diagnostics,
+            "amadeus": amadeus_msg,
         }
     elif scraper_diagnostics:
         _LAST_PROVIDER_DIAGNOSTIC["scrapers"] = scraper_diagnostics
+    if amadeus_msg != "nao_configurado":
+        _LAST_PROVIDER_DIAGNOSTIC["amadeus"] = amadeus_msg
 
     direct_results = _sort_and_dedupe(results)
 
