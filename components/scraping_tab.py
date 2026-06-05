@@ -30,6 +30,7 @@ _AIRLINE_COLORS = {
     "GOL": "#F97316",
     "LATAM": "#E11D48",
     "Google Flights": "#34A853",
+    "Copa Air": "#00205B",
 }
 
 _PROVIDER_LABELS = {
@@ -37,6 +38,7 @@ _PROVIDER_LABELS = {
     "gol": "GOL",
     "latam": "LATAM",
     "google_flights": "Google Flights",
+    "copa_air": "Copa Air",
 }
 
 
@@ -549,40 +551,51 @@ def _render_no_data_diagnostic(source_logs: list, run_logs: list) -> None:
     st.warning("Nenhum dado real de scraping foi encontrado no banco.")
 
     last_run = _format_date(run_logs[0].started_at) if run_logs else "Indisponível"
-    ga_hint = "Ativo (ENABLE_AIRLINE_SCRAPERS=true)" if settings.enable_airline_scrapers else "Inativo (ENABLE_AIRLINE_SCRAPERS=false)"
+    scrapers_ativo = settings.enable_airline_scrapers
+    ga_hint = (
+        "Ativo (ENABLE_AIRLINE_SCRAPERS=true)"
+        if scrapers_ativo
+        else "Inativo — adicione ENABLE_AIRLINE_SCRAPERS=true nos Secrets do GitHub Actions"
+    )
 
     diag = {
-        "Scraping implementado": "Sim (4 scrapers: Azul, GOL, LATAM, Google Flights)",
+        "Scraping implementado": "Sim (5 scrapers: Copa Air, Azul, GOL, LATAM, Google Flights)",
         "GitHub Actions configurado": "Sim (monitor.yml, a cada 30 min)",
-        "Scraping ativo": ga_hint,
+        "Scraping ativo neste ambiente": ga_hint,
         "Última execução registrada": last_run,
-        "Tabela de destino": "flight_quotes (provider = azul/gol/latam/google_flights)",
+        "Tabela de destino": "flight_quotes (provider = copa_air/azul/gol/latam/google_flights)",
     }
     for k, v in diag.items():
+        color = "#F97316" if not scrapers_ativo and k == "Scraping ativo neste ambiente" else ""
         st.markdown(
             f'<div class="status-row">'
             f'<span class="status-label">{k}</span>'
-            f'<span class="status-value">{v}</span>'
+            f'<span class="status-value" style="color:{color}">{v}</span>'
             f'</div>',
             unsafe_allow_html=True,
         )
 
-    st.markdown(
-        """
-        **Por que não há dados de scraping?**
-
-        1. **`ENABLE_AIRLINE_SCRAPERS` precisa ser `true`** nos *Secrets do GitHub Actions*.
-           Sem isso, os scrapers nem inicializam.
-        2. **Buscas ativas necessárias** — o worker só roda scrapers para buscas com status *Ativa*.
-           Crie uma busca em **Início → Buscar agora** e depois clique em *Monitorar esta rota 24h*.
-        3. **Bloqueio anti-bot** — os sites das companhias aéreas e o Google Flights frequentemente
-           bloqueiam IPs de datacenter (GitHub Actions). Os scrapers podem falhar com 403/captcha.
-           Isso é esperado e não quebra o workflow — o status de falha aparece em Configurações.
-        """
-    )
+    if not scrapers_ativo:
+        st.error(
+            "**Acao necessaria:** `ENABLE_AIRLINE_SCRAPERS` esta como `false` nos secrets do GitHub Actions. "
+            "Sem isso, os scrapers nunca inicializam e esta aba permanece vazia.\n\n"
+            "**Como corrigir (1 minuto):**\n"
+            "1. Acesse seu repositorio no GitHub\n"
+            "2. **Settings** → **Secrets and variables** → **Actions**\n"
+            "3. Clique em **New repository secret**\n"
+            "4. Nome: `ENABLE_AIRLINE_SCRAPERS` | Valor: `true`\n"
+            "5. Salve e rode o workflow manualmente com **force=true**"
+        )
+    else:
+        st.info(
+            "Scrapers estao habilitados mas ainda nao ha dados. Causas mais comuns:\n"
+            "- Busca ativa com data de ida no passado (expirada) — crie uma nova\n"
+            "- Sites bloqueando IPs de datacenter (anti-bot) — Copa Air tem menor restricao\n"
+            "- Worker ainda nao executou desde a ultima busca criada"
+        )
 
     if source_logs:
-        st.markdown("**Últimas tentativas de coleta (source_logs):**")
+        st.markdown("**Ultimas tentativas de coleta (source_logs):**")
         log_df = pd.DataFrame([
             {"Fonte": s.source, "Status": s.status,
              "Mensagem": (s.message or "")[:120], "Quando": _format_date(s.created_at)}
@@ -601,8 +614,8 @@ def render_scraping_tab(search_id_filter: int | None = None) -> None:
     """
     st.subheader("📡 Radar Scraping")
     st.caption(
-        "Cotações capturadas exclusivamente via scraping das companhias aéreas "
-        "(Azul, GOL, LATAM, Google Flights) pelo GitHub Actions."
+        "Cotacoes capturadas via scraping (Copa Air, Azul, GOL, LATAM, Google Flights) "
+        "pelo GitHub Actions. Requer ENABLE_AIRLINE_SCRAPERS=true nos Secrets."
     )
 
     try:

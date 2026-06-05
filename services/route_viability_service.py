@@ -11,8 +11,8 @@ Returns a dict with viability_score, label, and human-readable reasons.
 """
 from __future__ import annotations
 
-SCRAPER_SOURCES = {"azul", "gol", "latam", "google_flights"}
-API_SOURCES = {"travelpayouts"}
+SCRAPER_SOURCES = {"azul", "gol", "latam", "google_flights", "copa_air"}
+API_SOURCES = {"travelpayouts", "amadeus"}
 
 VIABILITY_LABELS = {
     (80, 101): "Melhor rota",
