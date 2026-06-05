@@ -550,49 +550,42 @@ def _render_no_data_diagnostic(source_logs: list, run_logs: list) -> None:
 
     st.warning("Nenhum dado real de scraping foi encontrado no banco.")
 
-    last_run = _format_date(run_logs[0].started_at) if run_logs else "Indisponível"
-    scrapers_ativo = settings.enable_airline_scrapers
-    ga_hint = (
-        "Ativo (ENABLE_AIRLINE_SCRAPERS=true)"
-        if scrapers_ativo
-        else "Inativo — adicione ENABLE_AIRLINE_SCRAPERS=true nos Secrets do GitHub Actions"
-    )
+    last_run = _format_date(run_logs[0].started_at) if run_logs else "Indisponivel"
 
+    # IMPORTANTE: settings.enable_airline_scrapers le o ambiente do Streamlit Cloud,
+    # NAO do GitHub Actions. Sao secrets separados e independentes.
+    # Prova de que o GitHub Actions tem o secret certo: se o step
+    # "Install Playwright browser" aparece nos logs do Actions, o secret esta true.
     diag = {
         "Scraping implementado": "Sim (5 scrapers: Copa Air, Azul, GOL, LATAM, Google Flights)",
         "GitHub Actions configurado": "Sim (monitor.yml, a cada 30 min)",
-        "Scraping ativo neste ambiente": ga_hint,
-        "Última execução registrada": last_run,
+        "Ultima execucao registrada": last_run,
         "Tabela de destino": "flight_quotes (provider = copa_air/azul/gol/latam/google_flights)",
+        "Nota": (
+            "Se 'Install Playwright browser' aparece nos logs do Actions, "
+            "ENABLE_AIRLINE_SCRAPERS=true esta ativo la."
+        ),
     }
     for k, v in diag.items():
-        color = "#F97316" if not scrapers_ativo and k == "Scraping ativo neste ambiente" else ""
         st.markdown(
             f'<div class="status-row">'
             f'<span class="status-label">{k}</span>'
-            f'<span class="status-value" style="color:{color}">{v}</span>'
+            f'<span class="status-value">{v}</span>'
             f'</div>',
             unsafe_allow_html=True,
         )
 
-    if not scrapers_ativo:
-        st.error(
-            "**Acao necessaria:** `ENABLE_AIRLINE_SCRAPERS` esta como `false` nos secrets do GitHub Actions. "
-            "Sem isso, os scrapers nunca inicializam e esta aba permanece vazia.\n\n"
-            "**Como corrigir (1 minuto):**\n"
-            "1. Acesse seu repositorio no GitHub\n"
-            "2. **Settings** → **Secrets and variables** → **Actions**\n"
-            "3. Clique em **New repository secret**\n"
-            "4. Nome: `ENABLE_AIRLINE_SCRAPERS` | Valor: `true`\n"
-            "5. Salve e rode o workflow manualmente com **force=true**"
-        )
-    else:
-        st.info(
-            "Scrapers estao habilitados mas ainda nao ha dados. Causas mais comuns:\n"
-            "- Busca ativa com data de ida no passado (expirada) — crie uma nova\n"
-            "- Sites bloqueando IPs de datacenter (anti-bot) — Copa Air tem menor restricao\n"
-            "- Worker ainda nao executou desde a ultima busca criada"
-        )
+    st.info(
+        "**Scrapers estao habilitados no GitHub Actions** (Playwright instalou = secret true). "
+        "Os scrapers rodaram mas retornaram 0 cotacoes. Causas mais comuns:\n\n"
+        "1. **Bloqueio anti-bot** — Azul/GOL/LATAM/Google bloqueiam IPs de datacenter com "
+        "captcha ou 403. Isso e esperado. **Copa Air** tem robots.txt aberto e e a fonte "
+        "com mais chance de funcionar.\n"
+        "2. **Busca expirada** — se a data de ida ja passou, o worker ignora a busca. "
+        "Verifique em Controle de Buscas se ha busca ativa com data futura.\n"
+        "3. **Parser desatualizado** — os sites mudam o HTML frequentemente; o seletor "
+        "pode nao estar encontrando os precos na pagina atual."
+    )
 
     if source_logs:
         st.markdown("**Ultimas tentativas de coleta (source_logs):**")
