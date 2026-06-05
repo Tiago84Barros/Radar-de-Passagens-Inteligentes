@@ -52,7 +52,10 @@ def is_expired(search: FlightSearch, today: date | None = None) -> bool:
 
 
 def is_due(search: FlightSearch, now: datetime | None = None) -> bool:
-    if not search.is_active:
+    # Gate on the status column (the panel's source of truth), not the legacy
+    # is_active flag — a "Buscar agora" search can have status='active' but
+    # is_active=False (default mismatch), and the panel still shows it as Ativa.
+    if effective_status(search) != RUNNABLE_STATUS:
         return False
     if not search.last_checked_at:
         return True
@@ -64,11 +67,15 @@ def is_due(search: FlightSearch, now: datetime | None = None) -> bool:
 
 
 def is_eligible(search: FlightSearch, now: datetime | None = None, force: bool = False) -> bool:
-    """Whether the worker should run this search now: active status, the legacy
-    is_active flag still true, not expired, and due (unless forced)."""
+    """Whether the worker should run this search now: effective status 'active',
+    not expired, and due (unless forced).
+
+    Uses ``effective_status`` (the status column) rather than the legacy
+    ``is_active`` flag so the worker stays consistent with the Controle de Buscas
+    panel. The two can disagree: a search created via "Buscar agora" gets
+    is_active=False but status defaults to 'active'; the panel shows it as Ativa,
+    so the worker must honour it too."""
     if effective_status(search) != RUNNABLE_STATUS:
-        return False
-    if not search.is_active:
         return False
     if is_expired(search):
         return False
@@ -80,8 +87,13 @@ def get_searches_to_run(db, now: datetime | None = None, force: bool = False) ->
 
     Ignores paused/deleted/completed/error statuses, expired searches, and those
     not yet due. ``force`` skips the frequency check. This is the single source of
-    truth the GitHub Actions worker uses to decide what runs."""
-    rows = list(db.scalars(select(FlightSearch).where(FlightSearch.is_active.is_(True))))
+    truth the GitHub Actions worker uses to decide what runs.
+
+    Loads every search and filters by ``is_eligible`` (which gates on the status
+    column) instead of a ``WHERE is_active = True`` SQL filter — otherwise searches
+    with status='active' but the legacy is_active=False (the "Buscar agora" case)
+    would be silently skipped even though the panel shows them as Ativa."""
+    rows = list(db.scalars(select(FlightSearch)))
     return [s for s in rows if is_eligible(s, now=now, force=force)]
 
 
