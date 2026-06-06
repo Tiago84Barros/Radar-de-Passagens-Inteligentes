@@ -5,3 +5,6 @@ __pycache__/
 .pytest_cache/
 .venv/
 .DS_Store
+
+# Debug/scraping artifacts (local only)
+outputs/

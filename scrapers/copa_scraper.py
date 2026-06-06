@@ -2,13 +2,24 @@
 
 robots.txt: User-agent: * Allow: /  (completamente aberto — verificado em 04/06/2026)
 
-Copa Air usa Angular SPA com backend GDS (Sabre). A estrategia principal e
-interceptar as chamadas de rede que a propria pagina faz ao seu backend; o
-fallback extrai precos diretamente do DOM renderizado.
+ESTADO ATUAL (verificado 06/06/2026): o site da Copa Air usa **DataDome**
+(protecao anti-bot comercial). Mesmo de IP residencial, em Chromium headless,
+a pagina de resultados nao carrega os dados de voo — o DataDome detecta o
+navegador automatizado (fingerprint headless) e serve apenas a casca HTML +
+um challenge ofuscado (dd.copaair.com). Nenhum preco e renderizado.
 
-Rota tipica: BEL -> MCO via PTY (Panama City, hub Copa).
-Precos retornados em USD por padrao — convertidos se currency=BRL com taxa
-de fallback (nao chama API de cambio para nao bloquear o fluxo).
+Contornar o DataDome exigiria stealth/fingerprint falso/proxy residencial/
+resolucao de challenge — tecnicas de evasao que este projeto NAO usa por
+politica (respeito a robots/termos/bloqueios). Portanto, quando o bloqueio e
+detectado, o scraper levanta ScraperError com mensagem clara em vez de retornar
+silenciosamente 0 cotacoes — assim o source_logs mostra "failed: DataDome" e o
+usuario sabe que a fonte esta indisponivel (nao que "rodou sem achar voos").
+
+Para rotas internacionais (ex.: BEL -> MCO via PTY), a fonte recomendada e a
+API oficial Amadeus (services/amadeus_provider.py), que nao depende de scraping.
+
+A estrategia de parsing (interceptar XHR JSON + fallback DOM) fica mantida para o
+caso de a Copa remover/afrouxar o DataDome no futuro.
 """
 from __future__ import annotations
 
@@ -17,7 +28,7 @@ import re
 from datetime import date
 from typing import Any
 
-from scrapers.base_scraper import BaseAirlineScraper, _date_to_day
+from scrapers.base_scraper import BaseAirlineScraper, ScraperError, _date_to_day
 
 
 class CopaAirScraper(BaseAirlineScraper):
@@ -35,6 +46,10 @@ class CopaAirScraper(BaseAirlineScraper):
         "fareBasis", "cabin", "departureDate", "arrivalDate",
         "carrierCode", "flightSegment", "pricingInfo",
     )
+
+    # Assinaturas de rede do DataDome (anti-bot). Se virmos uma dessas e nenhum
+    # dado de voo, e bloqueio — nao "rota sem resultado".
+    _DATADOME_SIGNATURES = ("dd.copaair.com", "datadome", "/captcha/", "geo.captcha-delivery")
 
     def _search_with_playwright(
         self,
@@ -65,9 +80,13 @@ class CopaAirScraper(BaseAirlineScraper):
         search_url = self._RESULTS_URL + params
 
         intercepted: list[dict] = []
+        datadome_seen: list[str] = []
 
         def _on_response(response) -> None:
             url = response.url
+            # Sinal de anti-bot (DataDome) — registra para diagnostico de bloqueio.
+            if any(sig in url.lower() for sig in self._DATADOME_SIGNATURES):
+                datadome_seen.append(url)
             if not any(k in url for k in ("copaair.com", "copa.com")):
                 return
             if response.status != 200:
@@ -77,12 +96,18 @@ class CopaAirScraper(BaseAirlineScraper):
                 return
             try:
                 body = response.text()
-                if any(kw in body for kw in self._FLIGHT_KEYWORDS):
+                # A pagina de politica de privacidade contem 'itinerary'/'cabin' em
+                # texto legal — exige indicio de PRECO para contar como dado de voo.
+                if any(kw in body for kw in self._FLIGHT_KEYWORDS) and (
+                    "totalFare" in body or "totalAmount" in body
+                    or "fareInfo" in body or "milesAmount" in body
+                ):
                     intercepted.append({"url": url, "body": body})
             except Exception:
                 pass
 
         results: list[dict[str, Any]] = []
+        body_text = ""
 
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=True)
@@ -111,15 +136,31 @@ class CopaAirScraper(BaseAirlineScraper):
             # Strategy 2: DOM price extraction as fallback
             if not results:
                 try:
-                    page_text = page.locator("body").inner_text(timeout=8_000)
+                    body_text = page.locator("body").inner_text(timeout=8_000)
                     results = _extract_from_dom(
-                        page_text, origin, destination,
+                        body_text, origin, destination,
                         dep_str, ret_str, currency, adults, limit, self,
                     )
                 except Exception:
                     pass
 
             browser.close()
+
+        # Honestidade no diagnostico: se nada foi extraido E vimos o DataDome
+        # (ou a pagina veio praticamente vazia), e bloqueio anti-bot — sinaliza
+        # como falha em vez de "0 cotacoes" (que parece rota sem voos).
+        if not results:
+            if datadome_seen:
+                raise ScraperError(
+                    "Copa Air bloqueada por DataDome (anti-bot). Pagina de resultados "
+                    "nao carrega dados de voo para navegador automatizado. Use a API "
+                    "Amadeus para esta rota."
+                )
+            if len(body_text.strip()) < 1500:
+                raise ScraperError(
+                    "Copa Air retornou pagina vazia (provavel anti-bot/SPA nao carregou). "
+                    "Sem dados de voo para extrair."
+                )
 
         return results[:limit]
 
