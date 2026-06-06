@@ -35,6 +35,41 @@ def _search_amadeus(search_params: dict[str, Any]) -> tuple[list[dict[str, Any]]
         return [], f"erro Amadeus: {str(exc)[:120]}"
 
 
+def _search_flightapi(search_params: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
+    """Fallback FlightAPI.io — usado SO quando nao ha resultados reais (free tier
+    pequeno; nao desperdicar cota). Failure-safe: retorna ([], msg) em qualquer erro."""
+    try:
+        from providers.flightapi_provider import FlightApiProvider
+        fa = FlightApiProvider()
+        if not fa.is_configured():
+            return [], "nao_configurado"
+        results = fa.search_flights(
+            origin=search_params["origin"],
+            destination=search_params["destination"],
+            departure_date=search_params["departure_date"],
+            return_date=search_params.get("return_date"),
+            currency=search_params.get("currency", "BRL"),
+            adults=int(search_params.get("adults") or search_params.get("passengers") or 1),
+            limit=search_params.get("limit", 20),
+        )
+        for r in results:
+            r.setdefault("source", "flightapi")
+            r.setdefault("provider", "flightapi")
+        msg = f"{len(results)} cotacao(oes) da FlightAPI" if results else "FlightAPI respondeu sem cotacoes"
+        return results, msg
+    except Exception as exc:  # noqa: BLE001
+        return [], f"erro FlightAPI: {str(exc)[:120]}"
+
+
+def _has_real_results(results: list[dict[str, Any]]) -> bool:
+    """True se ha ao menos uma cotacao de fonte real (nao demo/mock/fallback)."""
+    for r in results:
+        src = str(r.get("provider") or r.get("source") or "").lower()
+        if src and not any(m in src for m in ("demo", "mock", "fallback")):
+            return True
+    return False
+
+
 def search_all_providers(search_params: dict[str, Any]) -> list[dict[str, Any]]:
     """
     Search all providers for a route, including multi-segment connections
@@ -98,21 +133,48 @@ def search_all_providers(search_params: dict[str, Any]) -> list[dict[str, Any]]:
     scraper_results = search_all_scrapers(search_params)
     results.extend(scraper_results)
     scraper_diagnostics = get_last_scraper_diagnostics()
-    if scraper_results or amadeus_results:
+
+    # ── FlightAPI.io (fallback) — so se ainda nao ha resultado real ───────────
+    # Conserva a cota pequena do free tier: dispara apenas para rotas que as
+    # fontes anteriores nao cobriram (ex.: BEL->MCO sem cache na Travelpayouts).
+    flightapi_msg = "nao_acionado"
+    if not is_segment and not _has_real_results(results):
+        flightapi_results, flightapi_msg = _search_flightapi(search_params)
+        results.extend(flightapi_results)
+    else:
+        flightapi_results = []
+
+    if scraper_results or amadeus_results or flightapi_results:
         _LAST_PROVIDER_DIAGNOSTIC = {
             "provider": "hybrid",
             "status": "hybrid_ok",
             "message": (
                 f"{len(results)} cotacao(oes) coletadas entre "
-                f"Travelpayouts, Amadeus e scrapers."
+                f"Travelpayouts, Amadeus, FlightAPI e scrapers."
             ),
             "scrapers": scraper_diagnostics,
             "amadeus": amadeus_msg,
+            "flightapi": flightapi_msg,
         }
     elif scraper_diagnostics:
         _LAST_PROVIDER_DIAGNOSTIC["scrapers"] = scraper_diagnostics
     if amadeus_msg != "nao_configurado":
         _LAST_PROVIDER_DIAGNOSTIC["amadeus"] = amadeus_msg
+    if flightapi_msg not in {"nao_configurado", "nao_acionado"}:
+        _LAST_PROVIDER_DIAGNOSTIC["flightapi"] = flightapi_msg
+
+    # ── Parte 3: marcador honesto de cobertura ───────────────────────────────
+    # Distingue "rota sem cobertura nas fontes reais" de "erro/demo", para a UI
+    # poder avisar com clareza em vez de um vazio ambiguo.
+    if not _has_real_results(results):
+        _LAST_PROVIDER_DIAGNOSTIC["coverage"] = "sem_cobertura_real"
+        _LAST_PROVIDER_DIAGNOSTIC["coverage_note"] = (
+            "Nenhuma fonte real (Travelpayouts/Amadeus/FlightAPI/scrapers) tem dados "
+            "para esta rota/data. Rotas de baixo trafego ou internacionais de nicho "
+            "podem nao ter cobertura gratuita disponivel."
+        )
+    else:
+        _LAST_PROVIDER_DIAGNOSTIC["coverage"] = "ok"
 
     direct_results = _sort_and_dedupe(results)
 

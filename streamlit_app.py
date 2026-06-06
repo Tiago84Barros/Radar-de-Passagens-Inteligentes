@@ -254,16 +254,18 @@ def format_date(value: Any) -> str:
 
 def get_provider_status(settings) -> dict[str, Any]:
     amadeus_ok = bool(settings.amadeus_client_id and settings.amadeus_client_secret)
+    flightapi_ok = bool(getattr(settings, "flightapi_key", None))
     providers = {
         "Travelpayouts API": bool(settings.travelpayouts_api_token),
         "Amadeus API": amadeus_ok,
+        "FlightAPI.io (fallback)": flightapi_ok,
         "Copa Air scraping": bool(settings.enable_airline_scrapers),
         "Azul scraping": bool(settings.enable_airline_scrapers),
         "GOL scraping": bool(settings.enable_airline_scrapers),
         "LATAM scraping": bool(settings.enable_airline_scrapers),
     }
     active = [name for name, configured in providers.items() if configured]
-    has_real_api = bool(settings.travelpayouts_api_token) or amadeus_ok
+    has_real_api = bool(settings.travelpayouts_api_token) or amadeus_ok or flightapi_ok
     return {
         "providers": providers,
         "active_names": active,
@@ -1315,8 +1317,27 @@ def _render_home_route(summary: dict, df_quotes: pd.DataFrame, provider_status: 
     deals = get_airline_comparison(df_quotes, origin_code, dest_code)
 
     if not deals:
-        _empty_state("📭 A busca foi executada, mas ainda não há tarifas reais para esta rota. "
-                     "Tente novamente em alguns instantes ou ajuste as datas.")
+        # Aviso honesto de cobertura (parte 3): distingue "sem cobertura nas fontes
+        # reais" de uma falha temporaria, usando o diagnostico do provider_manager.
+        try:
+            from providers.provider_manager import get_last_provider_diagnostic
+            diag = get_last_provider_diagnostic()
+        except Exception:
+            diag = {}
+        if diag.get("coverage") == "sem_cobertura_real":
+            _empty_state(
+                "🌐 <strong>Rota sem cobertura nas fontes gratuitas.</strong><br>"
+                "Nenhuma fonte real (Travelpayouts, Amadeus, FlightAPI ou scrapers) "
+                "tem dados para <strong>" + f"{origin_code} → {dest_code}" + "</strong> nesta data.<br>"
+                "<span style='font-size:.85rem;color:#94A3B8'>"
+                "Rotas de baixo tráfego ou internacionais de nicho costumam não ter "
+                "dados gratuitos disponíveis. Tente uma rota mais movimentada (ex.: via "
+                "GRU/GIG) ou configure a FlightAPI.io nos secrets para ampliar a cobertura."
+                "</span>"
+            )
+        else:
+            _empty_state("📭 A busca foi executada, mas ainda não há tarifas reais para esta rota. "
+                         "Tente novamente em alguns instantes ou ajuste as datas.")
         st.divider()
         render_monitor_prompt(_home_route_dict(origin_code, dest_code, last_ctx))
         return
@@ -2157,6 +2178,7 @@ def render_settings(provider_status: dict[str, Any], db_connected: bool) -> None
         {"configuração": "AMADEUS_CLIENT_ID", "status": "Configurado" if settings.amadeus_client_id else "Não configurado"},
         {"configuração": "AMADEUS_CLIENT_SECRET", "status": "Configurado" if settings.amadeus_client_secret else "Não configurado"},
         {"configuração": "AMADEUS_ENV", "status": settings.amadeus_env},
+        {"configuração": "FLIGHTAPI_KEY (fallback)", "status": "Configurado" if getattr(settings, "flightapi_key", None) else "Não configurado"},
         {"configuração": "ENABLE_AIRLINE_SCRAPERS", "status": "Ativo (Copa, Azul, GOL, LATAM, Google)" if settings.enable_airline_scrapers else "Inativo"},
         {"configuração": "TELEGRAM_BOT_TOKEN", "status": "Configurado" if settings.telegram_bot_token else "Não configurado"},
         {"configuração": "TELEGRAM_CHAT_ID", "status": "Configurado" if settings.telegram_chat_id else "Não configurado"},
