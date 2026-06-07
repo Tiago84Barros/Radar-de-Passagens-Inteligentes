@@ -1,10 +1,9 @@
 from providers.provider_manager import get_last_provider_diagnostic, search_all_providers, search_year_price_calendar
 
 
-def test_hybrid_manager_uses_demo_when_token_and_scrapers_are_disabled(monkeypatch):
+def test_hybrid_manager_uses_demo_when_no_token(monkeypatch):
     monkeypatch.delenv("TRAVELPAYOUTS_API_TOKEN", raising=False)
     monkeypatch.delenv("TRAVELPAYOUTS_TOKEN", raising=False)
-    monkeypatch.setenv("ENABLE_AIRLINE_SCRAPERS", "false")
 
     from app.settings import get_settings
 
@@ -24,7 +23,6 @@ def test_hybrid_manager_uses_demo_when_token_and_scrapers_are_disabled(monkeypat
     assert results
     assert results[0]["source"] == "travelpayouts_demo"
     assert diagnostic["status"] == "demo_no_token"
-    assert diagnostic["scrapers"][0]["status"] == "disabled"
     get_settings.cache_clear()
 
 
