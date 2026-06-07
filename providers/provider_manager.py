@@ -62,6 +62,33 @@ def _search_claude(search_params: dict[str, Any]) -> tuple[list[dict[str, Any]],
         return [], f"erro Claude web_search: {str(exc)[:120]}"
 
 
+def _search_gemini(search_params: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
+    """Gemini + Google Search — pesquisa tarifas reais via busca web (mesma chave
+    GEMINI_API_KEY ja usada nos alertas). Failure-safe: retorna ([], msg) em
+    qualquer erro, nunca derruba o pipeline."""
+    try:
+        from providers.gemini_search_provider import GeminiSearchProvider
+        gemini = GeminiSearchProvider()
+        if not gemini.is_configured():
+            return [], "nao_configurado"
+        results = gemini.search_flights(
+            origin=search_params["origin"],
+            destination=search_params["destination"],
+            departure_date=search_params["departure_date"],
+            return_date=search_params.get("return_date"),
+            currency=search_params.get("currency", "BRL"),
+            adults=int(search_params.get("adults") or search_params.get("passengers") or 1),
+            limit=search_params.get("limit", 20),
+        )
+        for r in results:
+            r.setdefault("source", "gemini_web_search")
+            r.setdefault("provider", "gemini_web_search")
+        msg = f"{len(results)} cotacao(oes) via Gemini web search" if results else "Gemini web search nao retornou cotacoes"
+        return results, msg
+    except Exception as exc:  # noqa: BLE001
+        return [], f"erro Gemini web search: {str(exc)[:120]}"
+
+
 def _search_flightapi(search_params: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
     """Fallback FlightAPI.io — usado SO quando nao ha resultados reais (free tier
     pequeno; nao desperdicar cota). Failure-safe: retorna ([], msg) em qualquer erro."""
@@ -165,6 +192,14 @@ def search_all_providers(search_params: dict[str, Any]) -> list[dict[str, Any]]:
     if claude_results:
         _LAST_PROVIDER_DIAGNOSTIC["claude_web_search"] = claude_msg
 
+    # ── Gemini + Google Search (optional, runs alongside the others) ──────────
+    # Pesquisa tarifas reais via busca do Google feita pelo Gemini — usa a mesma
+    # GEMINI_API_KEY ja configurada para os alertas, sem custo adicional.
+    gemini_results, gemini_msg = _search_gemini(search_params)
+    results.extend(gemini_results)
+    if gemini_results:
+        _LAST_PROVIDER_DIAGNOSTIC["gemini_web_search"] = gemini_msg
+
     scraper_results = search_all_scrapers(search_params)
     results.extend(scraper_results)
     scraper_diagnostics = get_last_scraper_diagnostics()
@@ -179,17 +214,18 @@ def search_all_providers(search_params: dict[str, Any]) -> list[dict[str, Any]]:
     else:
         flightapi_results = []
 
-    if scraper_results or amadeus_results or claude_results or flightapi_results:
+    if scraper_results or amadeus_results or claude_results or gemini_results or flightapi_results:
         _LAST_PROVIDER_DIAGNOSTIC = {
             "provider": "hybrid",
             "status": "hybrid_ok",
             "message": (
                 f"{len(results)} cotacao(oes) coletadas entre "
-                f"Travelpayouts, Amadeus, Claude web_search, FlightAPI e scrapers."
+                f"Travelpayouts, Amadeus, Claude web_search, Gemini web search, FlightAPI e scrapers."
             ),
             "scrapers": scraper_diagnostics,
             "amadeus": amadeus_msg,
             "claude_web_search": claude_msg,
+            "gemini_web_search": gemini_msg,
             "flightapi": flightapi_msg,
         }
     elif scraper_diagnostics:
@@ -198,6 +234,8 @@ def search_all_providers(search_params: dict[str, Any]) -> list[dict[str, Any]]:
         _LAST_PROVIDER_DIAGNOSTIC["amadeus"] = amadeus_msg
     if claude_msg != "nao_configurado":
         _LAST_PROVIDER_DIAGNOSTIC["claude_web_search"] = claude_msg
+    if gemini_msg != "nao_configurado":
+        _LAST_PROVIDER_DIAGNOSTIC["gemini_web_search"] = gemini_msg
     if flightapi_msg not in {"nao_configurado", "nao_acionado"}:
         _LAST_PROVIDER_DIAGNOSTIC["flightapi"] = flightapi_msg
 
@@ -207,7 +245,7 @@ def search_all_providers(search_params: dict[str, Any]) -> list[dict[str, Any]]:
     if not _has_real_results(results):
         _LAST_PROVIDER_DIAGNOSTIC["coverage"] = "sem_cobertura_real"
         _LAST_PROVIDER_DIAGNOSTIC["coverage_note"] = (
-            "Nenhuma fonte real (Travelpayouts/Amadeus/Claude web_search/FlightAPI/scrapers) tem dados "
+            "Nenhuma fonte real (Travelpayouts/Amadeus/Claude web_search/Gemini web search/FlightAPI/scrapers) tem dados "
             "para esta rota/data. Rotas de baixo trafego ou internacionais de nicho "
             "podem nao ter cobertura gratuita disponivel."
         )

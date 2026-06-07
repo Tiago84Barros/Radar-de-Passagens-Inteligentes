@@ -48,6 +48,7 @@ class Settings:
     amadeus_client_secret: str | None
     amadeus_env: str
     anthropic_api_key: str | None
+    gemini_api_key: str | None
     kiwi_api_key: str | None
     flightapi_key: str | None
     travelpayouts_token: str | None
@@ -73,6 +74,7 @@ class Settings:
         self.amadeus_client_secret = get_config_value("AMADEUS_CLIENT_SECRET")
         self.amadeus_env = _normalize_amadeus_env(get_config_value("AMADEUS_ENV", "test") or "test")
         self.anthropic_api_key = get_config_value("ANTHROPIC_API_KEY")
+        self.gemini_api_key = get_config_value("GEMINI_API_KEY")
         self.kiwi_api_key = get_config_value("KIWI_API_KEY")
         self.flightapi_key = get_config_value("FLIGHTAPI_KEY")
         self.travelpayouts_api_token = get_config_value("TRAVELPAYOUTS_API_TOKEN") or get_config_value("TRAVELPAYOUTS_TOKEN")
