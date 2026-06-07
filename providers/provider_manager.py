@@ -1,10 +1,18 @@
+"""Orquestra a busca de tarifas usando exclusivamente as APIs configuradas.
+
+Scraping desativado. O app usa somente APIs configuradas.
+
+Papeis bem definidos:
+- Travelpayouts = fonte de precos reais (provider primario).
+- Gemini = apoio de analise/organizacao/fallback via busca web — nunca fonte
+  primaria de tarifa real; so entra quando a Travelpayouts nao retorna nada.
+"""
 from __future__ import annotations
 
 from datetime import date, timedelta
 from random import Random
 from typing import Any
 
-from scrapers.scraper_manager import get_last_scraper_diagnostics, search_all_scrapers
 from providers.travelpayouts_provider import TravelPayoutsProvider, TravelPayoutsProviderError
 
 
@@ -15,35 +23,16 @@ _LAST_PROVIDER_DIAGNOSTIC: dict[str, Any] = {
 }
 
 
-def _search_amadeus(search_params: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
-    """Call Amadeus if credentials are configured.
-
-    Returns (results, status_message). Failure-safe: returns ([], msg) on any error.
-    """
+def _search_gemini(search_params: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
+    """Gemini + Google Search — apoio de analise/fallback quando a Travelpayouts
+    (fonte de precos reais) nao retorna cotacoes para a rota/data. Failure-safe:
+    retorna ([], msg) em qualquer erro, nunca derruba o pipeline."""
     try:
-        from services.amadeus_provider import AmadeusProvider
-        amadeus = AmadeusProvider()
-        if not amadeus.is_configured():
+        from providers.gemini_search_provider import GeminiSearchProvider
+        gemini = GeminiSearchProvider()
+        if not gemini.is_configured():
             return [], "nao_configurado"
-        results = amadeus.search_flights(search_params)
-        for r in results:
-            r.setdefault("source", "amadeus")
-            r.setdefault("provider", "amadeus")
-        msg = f"{len(results)} cotacao(oes) da Amadeus" if results else "Amadeus respondeu sem cotacoes"
-        return results, msg
-    except Exception as exc:  # noqa: BLE001
-        return [], f"erro Amadeus: {str(exc)[:120]}"
-
-
-def _search_flightapi(search_params: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
-    """Fallback FlightAPI.io — usado SO quando nao ha resultados reais (free tier
-    pequeno; nao desperdicar cota). Failure-safe: retorna ([], msg) em qualquer erro."""
-    try:
-        from providers.flightapi_provider import FlightApiProvider
-        fa = FlightApiProvider()
-        if not fa.is_configured():
-            return [], "nao_configurado"
-        results = fa.search_flights(
+        results = gemini.search_flights(
             origin=search_params["origin"],
             destination=search_params["destination"],
             departure_date=search_params["departure_date"],
@@ -53,12 +42,12 @@ def _search_flightapi(search_params: dict[str, Any]) -> tuple[list[dict[str, Any
             limit=search_params.get("limit", 20),
         )
         for r in results:
-            r.setdefault("source", "flightapi")
-            r.setdefault("provider", "flightapi")
-        msg = f"{len(results)} cotacao(oes) da FlightAPI" if results else "FlightAPI respondeu sem cotacoes"
+            r.setdefault("source", "gemini_web_search")
+            r.setdefault("provider", "gemini_web_search")
+        msg = f"{len(results)} cotacao(oes) via Gemini (apoio)" if results else "Gemini nao retornou cotacoes de apoio"
         return results, msg
     except Exception as exc:  # noqa: BLE001
-        return [], f"erro FlightAPI: {str(exc)[:120]}"
+        return [], f"erro Gemini: {str(exc)[:120]}"
 
 
 def _has_real_results(results: list[dict[str, Any]]) -> bool:
@@ -72,8 +61,9 @@ def _has_real_results(results: list[dict[str, Any]]) -> bool:
 
 def search_all_providers(search_params: dict[str, Any]) -> list[dict[str, Any]]:
     """
-    Search all providers for a route, including multi-segment connections
-    through the Brazilian air network (unless this is already a segment call).
+    Busca tarifas usando exclusivamente Travelpayouts (precos reais) e, como
+    apoio/fallback, Gemini com busca web — incluindo conexoes multi-segmento
+    pela malha aerea brasileira (quando esta nao e ja uma chamada de segmento).
     """
     global _LAST_PROVIDER_DIAGNOSTIC
 
@@ -124,61 +114,45 @@ def search_all_providers(search_params: dict[str, Any]) -> list[dict[str, Any]]:
         }
         results.extend(_demo_results(search_params))
 
-    # ── Amadeus (optional, runs alongside TravelPayouts) ──────────────────────
-    amadeus_results, amadeus_msg = _search_amadeus(search_params)
-    results.extend(amadeus_results)
-    if amadeus_results:
-        _LAST_PROVIDER_DIAGNOSTIC["amadeus"] = amadeus_msg
-
-    scraper_results = search_all_scrapers(search_params)
-    results.extend(scraper_results)
-    scraper_diagnostics = get_last_scraper_diagnostics()
-
-    # ── FlightAPI.io (fallback) — so se ainda nao ha resultado real ───────────
-    # Conserva a cota pequena do free tier: dispara apenas para rotas que as
-    # fontes anteriores nao cobriram (ex.: BEL->MCO sem cache na Travelpayouts).
-    flightapi_msg = "nao_acionado"
+    # ── Gemini (apoio/fallback) — so aciona quando a Travelpayouts (fonte de
+    # precos reais) ainda nao trouxe nenhuma cotacao real para a rota/data.
+    gemini_msg = "nao_acionado"
     if not is_segment and not _has_real_results(results):
-        flightapi_results, flightapi_msg = _search_flightapi(search_params)
-        results.extend(flightapi_results)
+        gemini_results, gemini_msg = _search_gemini(search_params)
+        results.extend(gemini_results)
     else:
-        flightapi_results = []
+        gemini_results = []
 
-    if scraper_results or amadeus_results or flightapi_results:
+    if gemini_msg != "nao_configurado" and gemini_msg != "nao_acionado":
+        _LAST_PROVIDER_DIAGNOSTIC["gemini_apoio"] = gemini_msg
+
+    if gemini_results:
         _LAST_PROVIDER_DIAGNOSTIC = {
             "provider": "hybrid",
             "status": "hybrid_ok",
             "message": (
-                f"{len(results)} cotacao(oes) coletadas entre "
-                f"Travelpayouts, Amadeus, FlightAPI e scrapers."
+                f"{len(results)} cotacao(oes) coletadas: Travelpayouts (fonte de precos) "
+                f"+ Gemini (apoio de busca, pois a Travelpayouts nao retornou nada para esta rota)."
             ),
-            "scrapers": scraper_diagnostics,
-            "amadeus": amadeus_msg,
-            "flightapi": flightapi_msg,
+            "gemini_apoio": gemini_msg,
         }
-    elif scraper_diagnostics:
-        _LAST_PROVIDER_DIAGNOSTIC["scrapers"] = scraper_diagnostics
-    if amadeus_msg != "nao_configurado":
-        _LAST_PROVIDER_DIAGNOSTIC["amadeus"] = amadeus_msg
-    if flightapi_msg not in {"nao_configurado", "nao_acionado"}:
-        _LAST_PROVIDER_DIAGNOSTIC["flightapi"] = flightapi_msg
 
-    # ── Parte 3: marcador honesto de cobertura ───────────────────────────────
+    # ── Marcador honesto de cobertura ─────────────────────────────────────────
     # Distingue "rota sem cobertura nas fontes reais" de "erro/demo", para a UI
     # poder avisar com clareza em vez de um vazio ambiguo.
     if not _has_real_results(results):
         _LAST_PROVIDER_DIAGNOSTIC["coverage"] = "sem_cobertura_real"
         _LAST_PROVIDER_DIAGNOSTIC["coverage_note"] = (
-            "Nenhuma fonte real (Travelpayouts/Amadeus/FlightAPI/scrapers) tem dados "
-            "para esta rota/data. Rotas de baixo trafego ou internacionais de nicho "
-            "podem nao ter cobertura gratuita disponivel."
+            "Nenhuma fonte real (Travelpayouts/Gemini) tem dados para esta rota/data. "
+            "Rotas de baixo trafego ou internacionais de nicho podem nao ter cobertura "
+            "gratuita disponivel."
         )
     else:
         _LAST_PROVIDER_DIAGNOSTIC["coverage"] = "ok"
 
     direct_results = _sort_and_dedupe(results)
 
-    # ── Multi-segment search via Brazilian hubs ────────────────────────────
+    # ── Multi-segment search via Brazilian hubs (usa Travelpayouts) ──────────
     if not is_segment:
         try:
             from services.multi_segment_search import search_via_connections

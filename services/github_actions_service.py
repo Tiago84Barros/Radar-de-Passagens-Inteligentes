@@ -1,16 +1,15 @@
 from __future__ import annotations
 
-"""Trigger the monitor workflow on GitHub Actions from the Streamlit app.
+"""Trigger the monitoring-bot workflow on GitHub Actions from the Streamlit app.
 
-The app itself cannot run Playwright/Chromium (Streamlit Cloud has no browser),
-so the actual scraping happens in the scheduled GitHub Actions workflow
-(``monitor.yml``). This module lets the "Buscar agora" button fire that workflow
-on demand via the REST API (``workflow_dispatch``), so a fresh search is picked
-up within seconds instead of waiting up to 30 min for the cron.
+The bot runs on a schedule in ``monitor-searches.yml`` (every 4h). This module
+lets the "Executar agora" action fire that workflow on demand via the REST API
+(``workflow_dispatch``), so a fresh check is picked up within seconds instead of
+waiting for the next cron tick.
 
-Important: triggering here does NOT replace the cron. The schedule in
-``monitor.yml`` keeps running independently, so monitoring continues even with
-the app closed. This is purely an extra "run now" nudge.
+Important: triggering here does NOT replace the cron. The schedule keeps running
+independently, so monitoring continues even with the app closed. This is purely
+an extra "run now" nudge.
 """
 
 from dataclasses import dataclass
