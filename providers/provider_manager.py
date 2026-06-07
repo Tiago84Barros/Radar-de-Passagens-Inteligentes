@@ -35,6 +35,33 @@ def _search_amadeus(search_params: dict[str, Any]) -> tuple[list[dict[str, Any]]
         return [], f"erro Amadeus: {str(exc)[:120]}"
 
 
+def _search_claude(search_params: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
+    """Claude + web_search — pesquisa tarifas reais via busca web (resistente a
+    bloqueio de scraping, sem exigir API de voo paga). Failure-safe: retorna
+    ([], msg) em qualquer erro, nunca derruba o pipeline."""
+    try:
+        from providers.claude_search_provider import ClaudeSearchProvider
+        claude = ClaudeSearchProvider()
+        if not claude.is_configured():
+            return [], "nao_configurado"
+        results = claude.search_flights(
+            origin=search_params["origin"],
+            destination=search_params["destination"],
+            departure_date=search_params["departure_date"],
+            return_date=search_params.get("return_date"),
+            currency=search_params.get("currency", "BRL"),
+            adults=int(search_params.get("adults") or search_params.get("passengers") or 1),
+            limit=search_params.get("limit", 20),
+        )
+        for r in results:
+            r.setdefault("source", "claude_web_search")
+            r.setdefault("provider", "claude_web_search")
+        msg = f"{len(results)} cotacao(oes) via Claude web_search" if results else "Claude web_search nao retornou cotacoes"
+        return results, msg
+    except Exception as exc:  # noqa: BLE001
+        return [], f"erro Claude web_search: {str(exc)[:120]}"
+
+
 def _search_flightapi(search_params: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
     """Fallback FlightAPI.io — usado SO quando nao ha resultados reais (free tier
     pequeno; nao desperdicar cota). Failure-safe: retorna ([], msg) em qualquer erro."""
@@ -130,6 +157,14 @@ def search_all_providers(search_params: dict[str, Any]) -> list[dict[str, Any]]:
     if amadeus_results:
         _LAST_PROVIDER_DIAGNOSTIC["amadeus"] = amadeus_msg
 
+    # ── Claude + web_search (optional, runs alongside the others) ─────────────
+    # Pesquisa tarifas reais via busca web do Claude — resistente a bloqueio de
+    # scraping e sem custo de API de voo paga. Roda em paralelo as demais fontes.
+    claude_results, claude_msg = _search_claude(search_params)
+    results.extend(claude_results)
+    if claude_results:
+        _LAST_PROVIDER_DIAGNOSTIC["claude_web_search"] = claude_msg
+
     scraper_results = search_all_scrapers(search_params)
     results.extend(scraper_results)
     scraper_diagnostics = get_last_scraper_diagnostics()
@@ -144,22 +179,25 @@ def search_all_providers(search_params: dict[str, Any]) -> list[dict[str, Any]]:
     else:
         flightapi_results = []
 
-    if scraper_results or amadeus_results or flightapi_results:
+    if scraper_results or amadeus_results or claude_results or flightapi_results:
         _LAST_PROVIDER_DIAGNOSTIC = {
             "provider": "hybrid",
             "status": "hybrid_ok",
             "message": (
                 f"{len(results)} cotacao(oes) coletadas entre "
-                f"Travelpayouts, Amadeus, FlightAPI e scrapers."
+                f"Travelpayouts, Amadeus, Claude web_search, FlightAPI e scrapers."
             ),
             "scrapers": scraper_diagnostics,
             "amadeus": amadeus_msg,
+            "claude_web_search": claude_msg,
             "flightapi": flightapi_msg,
         }
     elif scraper_diagnostics:
         _LAST_PROVIDER_DIAGNOSTIC["scrapers"] = scraper_diagnostics
     if amadeus_msg != "nao_configurado":
         _LAST_PROVIDER_DIAGNOSTIC["amadeus"] = amadeus_msg
+    if claude_msg != "nao_configurado":
+        _LAST_PROVIDER_DIAGNOSTIC["claude_web_search"] = claude_msg
     if flightapi_msg not in {"nao_configurado", "nao_acionado"}:
         _LAST_PROVIDER_DIAGNOSTIC["flightapi"] = flightapi_msg
 
@@ -169,7 +207,7 @@ def search_all_providers(search_params: dict[str, Any]) -> list[dict[str, Any]]:
     if not _has_real_results(results):
         _LAST_PROVIDER_DIAGNOSTIC["coverage"] = "sem_cobertura_real"
         _LAST_PROVIDER_DIAGNOSTIC["coverage_note"] = (
-            "Nenhuma fonte real (Travelpayouts/Amadeus/FlightAPI/scrapers) tem dados "
+            "Nenhuma fonte real (Travelpayouts/Amadeus/Claude web_search/FlightAPI/scrapers) tem dados "
             "para esta rota/data. Rotas de baixo trafego ou internacionais de nicho "
             "podem nao ter cobertura gratuita disponivel."
         )

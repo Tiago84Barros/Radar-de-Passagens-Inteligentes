@@ -2237,6 +2237,12 @@ DATABASE_URL = "postgresql://user:pass@host/db" """,
     )
     render_sources_diagnostic()
 
+    st.divider()
+    st.markdown("**📡 Diagnóstico de scraping (avançado)**")
+    st.caption("Detalhes técnicos de viabilidade por fonte — uso ocasional, não afeta o funcionamento do radar.")
+    scraping_sid = st.session_state.get("scraping_filter_search_id")
+    render_scraping_tab(search_id_filter=scraping_sid)
+
     st.markdown("**Diagnóstico do banco**")
     st.json(database_diagnostics())
 
@@ -2299,9 +2305,10 @@ def main() -> None:
     df_quotes = load_quotes_df(_data_version())
     real_df_quotes = filter_real_quotes_df(df_quotes)
 
-    # Navegação simplificada (Histórico técnico, Oportunidades e Milhas saíram).
-    tab_home, tab_control, tab_scraping, tab_settings = st.tabs(
-        ["🏠 Início", "🛰️ Controle de Buscas", "📡 Radar Scraping", "⚙️ Configurações"]
+    # Navegação enxuta, focada no objetivo principal: buscar e monitorar passagens.
+    # Diagnóstico de scraping fica dentro de Configurações (uso avançado/ocasional).
+    tab_home, tab_control, tab_settings = st.tabs(
+        ["🏠 Início", "🛰️ Controle de Buscas", "⚙️ Configurações"]
     )
 
     with tab_home:
@@ -2309,10 +2316,6 @@ def main() -> None:
 
     with tab_control:
         render_search_control(summary, real_df_quotes)
-
-    with tab_scraping:
-        scraping_sid = st.session_state.get("scraping_filter_search_id")
-        render_scraping_tab(search_id_filter=scraping_sid)
 
     with tab_settings:
         render_settings(provider_status, db_connected)

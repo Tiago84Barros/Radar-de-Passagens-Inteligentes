@@ -5,23 +5,43 @@ import streamlit as st
 
 CSS = """
 <style>
+/* ── "Horizonte" — paleta e tipografia da marca ──────────────────
+   Identidade nova (jun/2026): indigo-noturno + acento ambar de
+   "horizonte ao amanhecer", contraponto frio em periwinkle. Display
+   serifado com personalidade (Fraunces) + corpo refinado (IBM Plex
+   Sans) — evitando Inter/Roboto/Arial e o vermelho padrao do
+   Streamlit. As variaveis --radar-* mantem os nomes legados para nao
+   quebrar os ~40 componentes que ja consomem este sistema; so os
+   valores (a paleta) mudam. */
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700;9..144,900&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
+
 :root {
-    --radar-bg: #08111F;
-    --radar-panel: #0F1B2D;
-    --radar-panel-soft: #13233A;
-    --radar-ink: #F8FAFC;
-    --radar-muted: #9AA8BC;
-    --radar-line: rgba(148,163,184,.20);
-    --radar-teal: #2DD4BF;
-    --radar-teal-soft: rgba(45,212,191,.14);
-    --radar-blue: #93C5FD;
-    --radar-amber: #FBBF24;
-    --radar-green: #86EFAC;
+    --radar-bg: #11142A;
+    --radar-panel: #1B1F3B;
+    --radar-panel-soft: #242A4D;
+    --radar-ink: #F5F1E8;
+    --radar-muted: #A6ABCB;
+    --radar-line: rgba(166,171,203,.20);
+    --radar-teal: #F2A154;
+    --radar-teal-soft: rgba(242,161,84,.14);
+    --radar-blue: #7C9CF5;
+    --radar-amber: #F2755A;
+    --radar-green: #7BC9A0;
     --radar-card-radius: 16px;
+    --radar-font-display: 'Fraunces', Georgia, serif;
+    --radar-font-body: 'IBM Plex Sans', -apple-system, sans-serif;
 }
 
 /* ── Base ─────────────────────────────────────────────────────── */
-.stApp { background: var(--radar-bg); color: var(--radar-ink); }
+.stApp { background: var(--radar-bg); color: var(--radar-ink); font-family: var(--radar-font-body); }
+.stApp, .stApp p, .stApp span, .stApp label, .stApp div { font-family: var(--radar-font-body); }
+.stApp h1, .stApp h2, .stApp h3,
+.radar-title, .origin-card-code, .deal-card-destination, .opp-card-code,
+.route-postcard-title, .decision-hero-verdict, .login-brand .login-title,
+.deals-section-header, .search-summary-title {
+    font-family: var(--radar-font-display) !important;
+    letter-spacing: -.01em;
+}
 
 /* ── Origin postcard card (Home tab) ──────────────────────────── */
 .origin-card {
