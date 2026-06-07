@@ -15,6 +15,7 @@ same logic works for both live API and demo/fallback modes.
 
 from typing import Any, Callable
 
+from data.airlines_catalog import get_airline_name
 from services.air_network import find_candidate_hubs, hub_route_label, is_domestic
 
 # Minimum layover time at the connection hub (minutes)
@@ -112,8 +113,8 @@ def _merge_segments(
     dur2 = int(leg2.get("duration_minutes") or 0)
     total_duration = (dur1 + LAYOVER_MINUTES + dur2) if (dur1 and dur2) else None
 
-    airline1 = (leg1.get("airline") or "").strip()
-    airline2 = (leg2.get("airline") or "").strip()
+    airline1 = get_airline_name(leg1.get("airline"))
+    airline2 = get_airline_name(leg2.get("airline"))
     if airline1 and airline2 and airline1 != airline2:
         airline_label = f"{airline1} + {airline2}"
     else:

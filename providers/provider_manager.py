@@ -3,9 +3,10 @@
 Scraping desativado. O app usa somente APIs configuradas.
 
 Papeis bem definidos:
-- Travelpayouts = fonte de precos reais (provider primario).
-- Gemini = apoio de analise/organizacao/fallback via busca web — nunca fonte
-  primaria de tarifa real; so entra quando a Travelpayouts nao retorna nada.
+- Gemini + Google Search = provider primario (cobre rotas/datas que a
+  Travelpayouts costuma nao ter, como rotas de baixo trafego ou nicho).
+- Travelpayouts = apoio/fallback; so entra quando o Gemini nao retorna
+  cotacoes para a rota/data.
 """
 from __future__ import annotations
 
@@ -24,9 +25,8 @@ _LAST_PROVIDER_DIAGNOSTIC: dict[str, Any] = {
 
 
 def _search_gemini(search_params: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
-    """Gemini + Google Search — apoio de analise/fallback quando a Travelpayouts
-    (fonte de precos reais) nao retorna cotacoes para a rota/data. Failure-safe:
-    retorna ([], msg) em qualquer erro, nunca derruba o pipeline."""
+    """Gemini + Google Search — provider primario de busca de tarifas.
+    Failure-safe: retorna ([], msg) em qualquer erro, nunca derruba o pipeline."""
     try:
         from providers.gemini_search_provider import GeminiSearchProvider
         gemini = GeminiSearchProvider()
@@ -44,7 +44,7 @@ def _search_gemini(search_params: dict[str, Any]) -> tuple[list[dict[str, Any]],
         for r in results:
             r.setdefault("source", "gemini_web_search")
             r.setdefault("provider", "gemini_web_search")
-        msg = f"{len(results)} cotacao(oes) via Gemini (apoio)" if results else "Gemini nao retornou cotacoes de apoio"
+        msg = f"{len(results)} cotacao(oes) via Gemini" if results else "Gemini nao retornou cotacoes"
         return results, msg
     except Exception as exc:  # noqa: BLE001
         return [], f"erro Gemini: {str(exc)[:120]}"
@@ -61,8 +61,8 @@ def _has_real_results(results: list[dict[str, Any]]) -> bool:
 
 def search_all_providers(search_params: dict[str, Any]) -> list[dict[str, Any]]:
     """
-    Busca tarifas usando exclusivamente Travelpayouts (precos reais) e, como
-    apoio/fallback, Gemini com busca web — incluindo conexoes multi-segmento
+    Busca tarifas usando o Gemini (busca web) como provider primario e a
+    Travelpayouts como apoio/fallback — incluindo conexoes multi-segmento
     pela malha aerea brasileira (quando esta nao e ja uma chamada de segmento).
     """
     global _LAST_PROVIDER_DIAGNOSTIC
@@ -70,71 +70,79 @@ def search_all_providers(search_params: dict[str, Any]) -> list[dict[str, Any]]:
     # Prevent recursive multi-segment calls
     is_segment = bool(search_params.get("_is_segment"))
 
-    provider = TravelPayoutsProvider()
     results: list[dict[str, Any]] = []
 
-    if provider.is_configured():
-        try:
-            tp_results = provider.search_flights(
-                origin=search_params["origin"],
-                destination=search_params["destination"],
-                departure_date=search_params["departure_date"],
-                return_date=search_params.get("return_date"),
-                currency=search_params.get("currency", "BRL"),
-                limit=search_params.get("limit", 20),
-            )
-            results.extend(tp_results)
-            if tp_results:
-                _LAST_PROVIDER_DIAGNOSTIC = {
-                    "provider": provider.name,
-                    "status": "real_ok",
-                    "message": f"{len(tp_results)} cotacao(oes) reais recebidas da Travelpayouts.",
-                }
-            else:
-                _LAST_PROVIDER_DIAGNOSTIC = {
-                    "provider": provider.name,
-                    "status": "real_empty",
-                    "message": "Travelpayouts respondeu, mas nao retornou cotacoes para essa rota/data.",
-                }
-        except TravelPayoutsProviderError as exc:
-            message = str(exc)
-            if exc.status_code:
-                message = f"{message} HTTP {exc.status_code}."
-            _LAST_PROVIDER_DIAGNOSTIC = {
-                "provider": provider.name,
-                "status": "real_failed_fallback",
-                "message": message,
-            }
-            results.extend(_demo_results(search_params, provider_name="travelpayouts_demo_fallback", fallback_reason=message))
+    # ── Gemini (provider primario) ────────────────────────────────────────────
+    gemini_results, gemini_msg = _search_gemini(search_params)
+    results.extend(gemini_results)
+    if gemini_results:
+        _LAST_PROVIDER_DIAGNOSTIC = {
+            "provider": "gemini_web_search",
+            "status": "real_ok",
+            "message": f"{len(gemini_results)} cotacao(oes) recebidas via Gemini (busca web).",
+        }
+    elif gemini_msg == "nao_configurado":
+        _LAST_PROVIDER_DIAGNOSTIC = {
+            "provider": "gemini_web_search",
+            "status": "not_configured",
+            "message": "Gemini nao configurado (GEMINI_API_KEY ausente); tentando Travelpayouts.",
+        }
     else:
         _LAST_PROVIDER_DIAGNOSTIC = {
-            "provider": provider.name,
-            "status": "demo_no_token",
-            "message": "TRAVELPAYOUTS_API_TOKEN nao configurado; usando modo demonstracao.",
+            "provider": "gemini_web_search",
+            "status": "real_empty",
+            "message": gemini_msg,
         }
-        results.extend(_demo_results(search_params))
 
-    # ── Gemini (apoio/fallback) — so aciona quando a Travelpayouts (fonte de
-    # precos reais) ainda nao trouxe nenhuma cotacao real para a rota/data.
-    gemini_msg = "nao_acionado"
+    # ── Travelpayouts (apoio/fallback) — so aciona quando o Gemini ainda nao
+    # trouxe nenhuma cotacao real para a rota/data.
+    tp_apoio_msg = "nao_acionado"
     if not is_segment and not _has_real_results(results):
-        gemini_results, gemini_msg = _search_gemini(search_params)
-        results.extend(gemini_results)
-    else:
-        gemini_results = []
+        provider = TravelPayoutsProvider()
+        if provider.is_configured():
+            try:
+                tp_results = provider.search_flights(
+                    origin=search_params["origin"],
+                    destination=search_params["destination"],
+                    departure_date=search_params["departure_date"],
+                    return_date=search_params.get("return_date"),
+                    currency=search_params.get("currency", "BRL"),
+                    limit=search_params.get("limit", 20),
+                )
+                results.extend(tp_results)
+                tp_apoio_msg = (
+                    f"{len(tp_results)} cotacao(oes) via Travelpayouts (apoio)"
+                    if tp_results else "Travelpayouts nao retornou cotacoes de apoio"
+                )
+            except TravelPayoutsProviderError as exc:
+                message = str(exc)
+                if exc.status_code:
+                    message = f"{message} HTTP {exc.status_code}."
+                tp_apoio_msg = f"erro Travelpayouts: {message}"
+                if not results:
+                    results.extend(_demo_results(search_params, provider_name="travelpayouts_demo_fallback", fallback_reason=message))
+        else:
+            tp_apoio_msg = "nao_configurado"
+            if not results:
+                _LAST_PROVIDER_DIAGNOSTIC = {
+                    "provider": "travelpayouts",
+                    "status": "demo_no_token",
+                    "message": "Gemini nao retornou cotacoes e TRAVELPAYOUTS_API_TOKEN nao configurado; usando modo demonstracao.",
+                }
+                results.extend(_demo_results(search_params))
 
-    if gemini_msg != "nao_configurado" and gemini_msg != "nao_acionado":
-        _LAST_PROVIDER_DIAGNOSTIC["gemini_apoio"] = gemini_msg
+    if tp_apoio_msg != "nao_acionado":
+        _LAST_PROVIDER_DIAGNOSTIC["travelpayouts_apoio"] = tp_apoio_msg
 
-    if gemini_results:
+    if gemini_results and _has_real_results(results) and len(results) > len(gemini_results):
         _LAST_PROVIDER_DIAGNOSTIC = {
             "provider": "hybrid",
             "status": "hybrid_ok",
             "message": (
-                f"{len(results)} cotacao(oes) coletadas: Travelpayouts (fonte de precos) "
-                f"+ Gemini (apoio de busca, pois a Travelpayouts nao retornou nada para esta rota)."
+                f"{len(results)} cotacao(oes) coletadas: Gemini (busca web, fonte primaria) "
+                f"+ Travelpayouts (apoio)."
             ),
-            "gemini_apoio": gemini_msg,
+            "travelpayouts_apoio": tp_apoio_msg,
         }
 
     # ── Marcador honesto de cobertura ─────────────────────────────────────────
@@ -182,6 +190,10 @@ def _search_segment(search_params: dict[str, Any]) -> list[dict[str, Any]]:
     Search a single one-way segment.  Used by multi_segment_search as the
     provider function for each leg — never triggers multi-segment recursion.
     """
+    gemini_results, _ = _search_gemini(search_params)
+    if gemini_results:
+        return gemini_results
+
     provider = TravelPayoutsProvider()
     if provider.is_configured():
         try:

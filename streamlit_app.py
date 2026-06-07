@@ -322,8 +322,8 @@ def _render_settings_tab() -> None:
     settings = get_settings()
     diag = database_diagnostics()
     rows = [
-        ("Travelpayouts (fonte de preços)", bool(settings.travelpayouts_api_token)),
-        ("Gemini (apoio/fallback)", bool(settings.gemini_api_key)),
+        ("Gemini (busca principal)", bool(settings.gemini_api_key)),
+        ("Travelpayouts (apoio/fallback)", bool(settings.travelpayouts_api_token)),
         ("Telegram", bool(settings.telegram_bot_token and settings.telegram_chat_id)),
         ("Banco de dados", diag["driver"] != "-"),
         ("GitHub Actions (executar agora)", github_trigger_configured()),
