@@ -6,7 +6,7 @@ from typing import Any
 import streamlit as st
 
 from app.formatting import format_brl
-from app.location_resolver import resolve_location
+from app.location_resolver import LocationResolution, search_locations
 from app.settings import get_settings
 from app.styles import load_custom_css
 from app.db import database_diagnostics, init_db
@@ -38,6 +38,35 @@ SORT_OPTIONS = {
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _location_option_label(loc: LocationResolution) -> str:
+    if loc.location_type == "city":
+        return f"🏙️ {loc.label} — todos os aeroportos da cidade"
+    if loc.location_type == "country":
+        return f"🌎 {loc.label} — aeroporto principal"
+    return f"🛫 {loc.label}"
+
+
+def _location_picker(label: str, state_key: str, placeholder: str) -> LocationResolution | None:
+    query = st.text_input(label, value=st.session_state.get(state_key, ""), placeholder=placeholder, key=f"{state_key}_text")
+    st.session_state[state_key] = query
+
+    options = search_locations(query) if query.strip() else []
+    if not options:
+        if query.strip():
+            st.caption("Nenhum aeroporto encontrado. Tente o nome da cidade ou o código IATA.")
+        return None
+
+    labels = [_location_option_label(opt) for opt in options]
+    chosen_idx = st.selectbox(
+        "Selecione",
+        options=list(range(len(options))),
+        format_func=lambda i: labels[i],
+        key=f"{state_key}_choice",
+        label_visibility="collapsed",
+    )
+    return options[chosen_idx]
+
 
 def _offer_to_option(offer: dict, min_mile_value: float) -> dict:
     from services.miles_service import enrich_deal_with_miles
@@ -125,14 +154,14 @@ def _render_result_card(option: dict, min_mile_value: float) -> None:
 def _render_search_tab() -> None:
     with st.sidebar:
         st.markdown("## ✈️ Buscar passagem")
-        origin_input = st.text_input("Origem", value=st.session_state.get("search_origin_input", ""), placeholder="Ex.: GRU ou São Paulo")
-        destination_input = st.text_input("Destino", value=st.session_state.get("search_destination_input", ""), placeholder="Ex.: LIS ou Lisboa")
+        origin_res = _location_picker("Origem", "search_origin_input", "Ex.: GRU ou São Paulo")
+        destination_res = _location_picker("Destino", "search_destination_input", "Ex.: LIS ou Lisboa")
         col_a, col_b = st.columns(2)
-        departure_date = col_a.date_input("Ida", value=date.today() + timedelta(days=30))
+        departure_date = col_a.date_input("Ida", value=date.today() + timedelta(days=30), format="DD/MM/YYYY")
         trip_type = st.radio("Tipo de viagem", ["Ida e volta", "Somente ida"], horizontal=True)
         return_date = None
         if trip_type == "Ida e volta":
-            return_date = col_b.date_input("Volta", value=departure_date + timedelta(days=7))
+            return_date = col_b.date_input("Volta", value=departure_date + timedelta(days=7), format="DD/MM/YYYY")
         adults = st.number_input("Passageiros", min_value=1, max_value=9, value=1)
 
         st.markdown("---")
@@ -148,8 +177,6 @@ def _render_search_tab() -> None:
         search_clicked = st.button("🔍 Buscar passagens", type="primary", use_container_width=True)
 
     if search_clicked:
-        origin_res = resolve_location(origin_input)
-        destination_res = resolve_location(destination_input)
         if not origin_res or not destination_res:
             st.error("Não foi possível identificar a origem e/ou o destino. Use o código IATA (ex.: GRU) ou o nome da cidade.")
             return
@@ -170,8 +197,6 @@ def _render_search_tab() -> None:
             "search_window_days": 1,
             "telegram_enabled": True,
         }
-        st.session_state["search_origin_input"] = origin_input
-        st.session_state["search_destination_input"] = destination_input
         st.session_state["last_search_form"] = form
         with st.spinner("Buscando as melhores tarifas..."):
             try:

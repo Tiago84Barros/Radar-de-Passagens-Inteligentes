@@ -35,6 +35,9 @@ CSS = """
 /* ── Base ─────────────────────────────────────────────────────── */
 .stApp { background: var(--radar-bg); color: var(--radar-ink); font-family: var(--radar-font-body); }
 .stApp, .stApp p, .stApp span, .stApp label, .stApp div { font-family: var(--radar-font-body); }
+[data-testid="stIconMaterial"], .material-symbols-rounded, .material-symbols-outlined, .material-icons {
+    font-family: 'Material Symbols Rounded', 'Material Icons' !important;
+}
 .stApp h1, .stApp h2, .stApp h3,
 .radar-title, .origin-card-code, .deal-card-destination, .opp-card-code,
 .route-postcard-title, .decision-hero-verdict, .login-brand .login-title,
