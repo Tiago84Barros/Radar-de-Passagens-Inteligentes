@@ -120,33 +120,52 @@ def _summary_card(column, title: str, option: dict | None, badge: str) -> None:
 
 
 def _render_result_card(option: dict, min_mile_value: float) -> None:
+    import html as _html
+
     price = option["price_brl"]
     miles = option.get("estimated_miles") or estimate_miles_from_cash_price(price, min_mile_value)
     cmp = compare_cash_vs_miles(price, miles, option.get("taxes") or 0.0, min_mile_value)
 
-    with st.container(border=True):
-        c1, c2, c3, c4 = st.columns([2, 3, 2, 2])
-        with c1:
-            st.markdown(f"**{get_airline_name(option.get('airline') or '')}**")
-            st.caption(option.get("origin_iata") or "—")
-        with c2:
-            st.markdown(
-                f"{format_date_br(option.get('departure_date'))} → {format_date_br(option.get('return_date'))}"
-            )
-            st.caption(
-                f"⏱ {format_duration_short(option.get('duration_minutes')) or '—'} · "
-                f"🔁 {format_stops(option.get('stops')) or '—'}"
-            )
-        with c3:
-            st.markdown(f"**{format_brl(price)}**")
-            st.caption(f"≈ {format_miles(miles)} · {cmp['recommendation']}")
-        with c4:
-            link = option.get("booking_link") or ""
-            if link:
-                st.link_button("Veja mais", link, use_container_width=True)
-            else:
-                st.button("Veja mais", disabled=True, use_container_width=True, key=f"no_link_{id(option)}")
-            st.caption(f"Fonte: {option.get('provider') or '—'}")
+    airline = _html.escape(get_airline_name(option.get("airline") or ""))
+    origin = _html.escape(option.get("origin_iata") or "—")
+    dates = _html.escape(
+        f"{format_date_br(option.get('departure_date'))} → {format_date_br(option.get('return_date'))}"
+    )
+    duration = _html.escape(format_duration_short(option.get("duration_minutes")) or "—")
+    stops = _html.escape(format_stops(option.get("stops")) or "—")
+    price_label = _html.escape(format_brl(price))
+    miles_label = _html.escape(f"≈ {format_miles(miles)} · {cmp['recommendation']}")
+    provider = _html.escape(option.get("provider") or "—")
+    link = option.get("booking_link") or ""
+
+    if link:
+        action_html = f'<a class="result-card-cta" href="{_html.escape(link, quote=True)}" target="_blank" rel="noopener noreferrer">Veja mais</a>'
+    else:
+        action_html = '<span class="result-card-cta result-card-cta-disabled">Veja mais</span>'
+
+    st.markdown(
+        f"""
+        <div class="result-card">
+            <div class="result-card-col result-card-airline">
+                <div class="result-card-airline-name">{airline}</div>
+                <div class="result-card-muted">{origin}</div>
+            </div>
+            <div class="result-card-col result-card-route">
+                <div class="result-card-dates">{dates}</div>
+                <div class="result-card-muted">⏱ {duration} · 🔁 {stops}</div>
+            </div>
+            <div class="result-card-col result-card-price">
+                <div class="result-card-price-value">{price_label}</div>
+                <div class="result-card-muted">{miles_label}</div>
+            </div>
+            <div class="result-card-col result-card-action">
+                {action_html}
+                <div class="result-card-source">Fonte: {provider}</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
@@ -173,6 +192,15 @@ def _render_search_tab() -> None:
         )
         max_stops = st.selectbox("Máximo de conexões", ["Sem limite", "Direto", "Até 1", "Até 2"], index=0)
         max_stops_value = {"Sem limite": None, "Direto": 0, "Até 1": 1, "Até 2": 2}[max_stops]
+        max_duration_hours = st.slider(
+            "Duração máxima da viagem (horas)",
+            min_value=2,
+            max_value=40,
+            value=40,
+            step=1,
+            help="Arraste até o máximo para não aplicar limite de duração.",
+        )
+        max_duration_minutes_value = None if max_duration_hours >= 40 else max_duration_hours * 60
 
         search_clicked = st.button("🔍 Buscar passagens", type="primary", use_container_width=True)
 
@@ -193,7 +221,7 @@ def _render_search_tab() -> None:
             "consider_miles": consider_miles,
             "min_mile_value": float(min_mile_value),
             "max_stops": max_stops_value,
-            "max_duration_minutes": None,
+            "max_duration_minutes": max_duration_minutes_value,
             "search_window_days": 1,
             "telegram_enabled": True,
         }

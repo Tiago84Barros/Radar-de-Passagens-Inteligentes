@@ -1289,6 +1289,56 @@ a.buy-link {
 }
 .filter-count { color: var(--radar-teal); font-weight: 800; margin-left: 8px; }
 
+/* ── Result cards (search results, comparator layout) ───────── */
+.result-card {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    border: 1px solid var(--radar-line);
+    background: var(--radar-panel);
+    border-radius: var(--radar-card-radius);
+    padding: 16px 20px;
+    margin-bottom: 12px;
+    box-shadow: 0 14px 34px rgba(0,0,0,.22);
+    transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease;
+}
+.result-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 24px 50px rgba(0,0,0,.34);
+    border-color: rgba(242,161,84,.35);
+}
+.result-card-col { display: flex; flex-direction: column; gap: 4px; }
+.result-card-airline { flex: 1.4; min-width: 0; }
+.result-card-route { flex: 2; min-width: 0; }
+.result-card-price { flex: 1.3; min-width: 0; }
+.result-card-action { flex: 1.1; align-items: flex-end; text-align: right; gap: 8px; }
+.result-card-airline-name { font-weight: 800; font-size: 1rem; color: var(--radar-ink); }
+.result-card-dates { font-weight: 650; font-size: .98rem; color: var(--radar-ink); }
+.result-card-price-value { font-weight: 900; font-size: 1.18rem; color: var(--radar-ink); letter-spacing: -.01em; }
+.result-card-muted { color: var(--radar-muted); font-size: .82rem; line-height: 1.4; }
+.result-card-source { color: var(--radar-muted); font-size: .74rem; }
+.result-card-cta {
+    display: inline-block;
+    padding: 8px 18px;
+    border-radius: 999px;
+    background: var(--radar-teal);
+    color: #06241f !important;
+    font-weight: 800;
+    font-size: .88rem;
+    text-decoration: none !important;
+    transition: filter .15s ease, transform .15s ease;
+}
+.result-card-cta:hover { filter: brightness(1.08); transform: translateY(-1px); }
+.result-card-cta-disabled {
+    background: rgba(255,255,255,.06);
+    color: var(--radar-muted) !important;
+    cursor: default;
+}
+@media (max-width: 720px) {
+    .result-card { flex-direction: column; align-items: stretch; gap: 10px; }
+    .result-card-action { align-items: flex-start; text-align: left; }
+}
+
 /* ── Responsive ──────────────────────────────────────────────── */
 @media (max-width: 900px) {
     .top-shell { display: block; }
