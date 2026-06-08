@@ -110,19 +110,38 @@ def _run_manual_search(form: dict) -> list[dict]:
 
 # ── Result cards ──────────────────────────────────────────────────────────────
 
+_RANKING_CARD_VARIANTS = {
+    "Recomendado": "ranking-card-recommended",
+    "Mais barato": "ranking-card-cheapest",
+    "Mais rápido": "ranking-card-fastest",
+}
+
+
 def _summary_card(column, title: str, option: dict | None, badge: str) -> None:
+    variant = _RANKING_CARD_VARIANTS.get(title, "ranking-card-recommended")
     with column:
-        st.markdown(f"#### {badge} {title}")
         if not option:
-            st.caption("Sem opções para destacar.")
+            st.markdown(
+                f'<div class="ranking-card {variant}">'
+                f'<div class="ranking-card-title">{badge} {title}</div>'
+                f'<div class="ranking-card-empty">Sem opções para destacar.</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
             return
-        st.markdown(f"**{format_brl(option['price_brl'])}**")
-        st.caption(
-            f"{get_airline_name(option.get('airline') or '')} · "
-            f"{format_duration_short(option.get('duration_minutes')) or '—'} · "
-            f"{format_stops(option.get('stops')) or '—'}"
+        st.markdown(
+            f'<div class="ranking-card {variant}">'
+            f'<div class="ranking-card-title">{badge} {title}</div>'
+            f'<div class="ranking-card-price">{format_brl(option["price_brl"])}</div>'
+            f'<div class="ranking-card-meta">'
+            f'{get_airline_name(option.get("airline") or "")} · '
+            f'{format_duration_short(option.get("duration_minutes")) or "—"} · '
+            f'{format_stops(option.get("stops")) or "—"}'
+            f'</div>'
+            f'<div class="ranking-card-miles">≈ {format_miles(option.get("estimated_miles") or 0)}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
         )
-        st.caption(f"≈ {format_miles(option.get('estimated_miles') or 0)}")
 
 
 def _render_result_card(option: dict, min_mile_value: float) -> None:

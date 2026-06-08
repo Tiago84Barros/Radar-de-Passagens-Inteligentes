@@ -1219,6 +1219,34 @@ a.buy-link {
 .summary-airlines { margin-top: 10px; font-size: .9rem; color: var(--radar-ink); }
 .summary-airlines span { color: var(--radar-muted); }
 
+/* ── Ranking summary cards (Recomendado / Mais barato / Mais rápido) ── */
+.ranking-card {
+    padding: 18px 20px; border-radius: var(--radar-card-radius); height: 100%;
+    background: var(--radar-panel); border: 1px solid var(--radar-line);
+    border-top: 4px solid var(--radar-teal);
+    box-shadow: 0 14px 34px rgba(0,0,0,.22);
+    transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+    display: flex; flex-direction: column; gap: 6px;
+}
+.ranking-card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 22px 48px rgba(0,0,0,.34);
+}
+.ranking-card-recommended { border-top-color: var(--radar-teal); }
+.ranking-card-cheapest    { border-top-color: #34D399; }
+.ranking-card-fastest     { border-top-color: var(--radar-blue); }
+.ranking-card-title {
+    font-size: .92rem; font-weight: 850; color: var(--radar-muted);
+    display: flex; align-items: center; gap: 6px;
+}
+.ranking-card-price {
+    font-family: var(--radar-font-display); font-size: 1.5rem; font-weight: 800;
+    color: var(--radar-ink); margin: 2px 0;
+}
+.ranking-card-meta { font-size: .85rem; color: var(--radar-muted); }
+.ranking-card-miles { font-size: .82rem; color: var(--radar-amber); font-weight: 700; }
+.ranking-card-empty { font-size: .9rem; color: var(--radar-muted); opacity: .75; }
+
 /* ── Best-option cards (cash / miles) ────────────────────────── */
 .option-card {
     padding: 16px 18px; border-radius: 14px; height: 100%;
