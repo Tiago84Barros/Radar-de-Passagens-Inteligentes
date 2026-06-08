@@ -97,6 +97,9 @@ def _run_manual_search(form: dict) -> list[dict]:
         "passengers": form.get("adults", 1),
         "currency": "BRL",
         "max_price": form.get("max_price"),
+        "date_flex_days": form.get("date_flex_days", 0),
+        "max_connection_hubs": form.get("max_connection_hubs", 4),
+        "force_web_search": form.get("force_web_search", False),
     }
     offers = search_all_providers(params)
     return [_offer_to_option(o, form.get("min_mile_value") or DEFAULT_CENTS_PER_MILE) for o in offers]
@@ -202,6 +205,50 @@ def _render_search_tab() -> None:
         )
         max_duration_minutes_value = None if max_duration_hours >= 40 else max_duration_hours * 60
 
+        with st.expander("🔧 Fontes e alcance da busca"):
+            st.caption(
+                "Ajuste até onde o radar vai para achar tarifas — buscas mais "
+                "amplas demoram um pouco mais, mas aumentam a chance de achar "
+                "um preço melhor."
+            )
+            date_flex_days = st.slider(
+                "Tolerância de datas (dias para cada lado)",
+                min_value=0,
+                max_value=5,
+                value=0,
+                step=1,
+                help=(
+                    "Além da data escolhida, também busca tarifas reais nos dias "
+                    "vizinhos (ex.: 2 = de -2 a +2 dias). Preço de passagem varia "
+                    "bastante de um dia para o outro — alargar a janela aumenta a "
+                    "chance de achar algo bem mais barato perto da data desejada."
+                ),
+            )
+            max_connection_hubs = st.slider(
+                "Aeroportos de conexão a tentar",
+                min_value=0,
+                max_value=6,
+                value=4,
+                step=1,
+                help=(
+                    "Quantos aeroportos brasileiros (GRU, GIG, BSB, CGH...) o "
+                    "radar tenta como conexão para montar rotas combinadas mais "
+                    "baratas que o voo direto — mesmo que isso signifique trocar "
+                    "de avião no meio do caminho. 0 desativa essa busca."
+                ),
+            )
+            force_web_search = st.checkbox(
+                "Sempre cruzar com pesquisa web (IA)",
+                value=False,
+                help=(
+                    "Por padrão, a pesquisa via IA (Gemini + Google Search) só "
+                    "entra como apoio quando a Travelpayouts não retorna nada. "
+                    "Ative para sempre cruzar os preços com uma pesquisa web "
+                    "extra e aumentar o alcance das fontes — a busca fica mais "
+                    "lenta, mas cobre mais lugares."
+                ),
+            )
+
         search_clicked = st.button("🔍 Buscar passagens", type="primary", use_container_width=True)
 
     if search_clicked:
@@ -224,6 +271,9 @@ def _render_search_tab() -> None:
             "max_duration_minutes": max_duration_minutes_value,
             "search_window_days": 1,
             "telegram_enabled": True,
+            "date_flex_days": int(date_flex_days),
+            "max_connection_hubs": int(max_connection_hubs),
+            "force_web_search": bool(force_web_search),
         }
         st.session_state["last_search_form"] = form
         with st.spinner("Buscando as melhores tarifas..."):

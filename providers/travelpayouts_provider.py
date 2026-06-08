@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 import requests
@@ -67,6 +67,58 @@ class TravelPayoutsProvider(BaseProvider):
             item["date_match"] = "month_fallback"
             item["requested_date"] = _date_to_day(departure_date)
         return month_results
+
+    def search_flexible_dates(
+        self,
+        origin: str,
+        destination: str,
+        departure_date: date | str,
+        return_date: date | str | None = None,
+        flex_days: int = 0,
+        currency: str = "brl",
+        limit_per_day: int = 10,
+    ) -> list[dict[str, Any]]:
+        """Varre os dias vizinhos a data pedida (departure_date +/- flex_days,
+        uma chamada por dia) e devolve as cotacoes reais encontradas em cada
+        um. Controlado pelo usuario (slider de "tolerancia de datas"): preco
+        de passagem varia bastante de um dia para o outro, entao alargar a
+        janela de busca aumenta a chance de achar uma tarifa bem mais barata
+        perto da data desejada. Cada item vem marcado com 'date_match' =
+        'flex_search', 'date_offset_days' e 'requested_date' para a UI deixar
+        claro que a data encontrada e diferente da pedida — nunca disfarçar."""
+        if not self.is_configured() or flex_days <= 0:
+            return []
+
+        base_departure = _to_date(departure_date)
+        base_return = _to_date(return_date) if return_date else None
+        requested = _date_to_day(departure_date)
+
+        results: list[dict[str, Any]] = []
+        for offset in range(-flex_days, flex_days + 1):
+            if offset == 0:
+                continue  # dia exato ja coberto por search_flights
+            day = base_departure + timedelta(days=offset)
+            if day < date.today():
+                continue
+            return_day = (base_return + timedelta(days=offset)) if base_return else None
+            try:
+                day_results = self._fetch(
+                    origin=origin,
+                    destination=destination,
+                    departure_at=_date_to_day(day),
+                    return_at=_date_to_day(return_day) if return_day else None,
+                    return_date=return_date,
+                    currency=currency,
+                    limit=limit_per_day,
+                )
+            except TravelPayoutsProviderError:
+                continue
+            for item in day_results:
+                item["date_match"] = "flex_search"
+                item["date_offset_days"] = offset
+                item["requested_date"] = requested
+            results.extend(day_results)
+        return results
 
     def _fetch(
         self,
@@ -208,6 +260,12 @@ def _date_to_month(value: date | str) -> str:
 def _date_to_day(value: date | str) -> str:
     text = value.isoformat() if hasattr(value, "isoformat") else str(value)
     return text[:10]
+
+
+def _to_date(value: date | str) -> date:
+    if isinstance(value, date):
+        return value
+    return date.fromisoformat(_date_to_day(value))
 
 
 def _month_start(value: date | str) -> date:

@@ -89,8 +89,15 @@ def find_candidate_hubs(
     """
     Return a ranked list of hub airports to try as 1-stop connections.
 
-    Excludes origin and destination from the result.
-    Capped at max_hubs entries.
+    Builds a wider, more diverse pool than a single curated pair lookup —
+    editorial picks for the region pair come first (most promising), then the
+    nationally-connected primary hubs, then secondary hubs based in the
+    origin/destination regions, then generic fallbacks. This way, raising
+    `max_hubs` actually surfaces *different* airports across Brazil instead of
+    repeating the same two — maximizing the chance of finding a cheaper
+    combined route, even when it means changing planes along the way.
+
+    Excludes origin and destination from the result. Capped at max_hubs entries.
     """
     origin = origin.upper()
     destination = destination.upper()
@@ -98,21 +105,32 @@ def find_candidate_hubs(
     origin_region = get_region(origin)
     dest_region = get_region(destination)
 
-    # Look up the preferred list (try both directions)
-    hubs = (
-        _HUB_PREFS.get((origin_region, dest_region))
-        or _HUB_PREFS.get((dest_region, origin_region))
-        or list(_DEFAULT_HUBS)
-    )
+    ranked: list[str] = []
 
-    # Never suggest the origin or destination as a hub
-    hubs = [h for h in hubs if h not in (origin, destination)]
+    def _add(*codes: str | None) -> None:
+        for code in codes:
+            if code and code not in ranked:
+                ranked.append(code)
 
-    # Make sure GRU is always at least attempted (unless it IS origin/dest)
-    if "GRU" not in hubs and "GRU" not in (origin, destination):
-        hubs = ["GRU"] + hubs
+    # 1) Editorial picks for this region pair — most promising connections first
+    _add(*(_HUB_PREFS.get((origin_region, dest_region)) or ()))
+    _add(*(_HUB_PREFS.get((dest_region, origin_region)) or ()))
 
-    return hubs[:max_hubs]
+    # 2) Nationally-connected hubs — almost always worth trying
+    _add(*PRIMARY_HUBS)
+
+    # 3) Secondary hubs based in the origin/destination regions — useful for
+    # "breaking" the trip near one end of the journey
+    for region in (origin_region, dest_region):
+        if region:
+            _add(*(h for h in SECONDARY_HUBS if h in REGIONS.get(region, frozenset())))
+
+    # 4) Generic fallback for anything still missing
+    _add(*_DEFAULT_HUBS)
+    _add(*SECONDARY_HUBS)
+
+    candidates = [h for h in ranked if h not in (origin, destination)]
+    return candidates[:max_hubs]
 
 
 def is_domestic(origin: str, destination: str) -> bool:

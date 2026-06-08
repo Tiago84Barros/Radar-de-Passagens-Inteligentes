@@ -50,8 +50,11 @@ def search_via_connections(
     if not origin or not destination or origin == destination:
         return []
 
-    # Only apply for Brazilian domestic routes or when origin is in Brazil
-    if not _origin_is_domestic(origin):
+    # So vale tentar conexao via hub brasileiro se a rota toca o Brasil em
+    # alguma ponta — origem OU destino. Limitar a "so quando a origem e
+    # domestica" deixava de fora rotas como LIS->BEL, onde conectar em GRU/GIG
+    # pode ser justamente a forma mais barata (ou a unica) de fechar a viagem.
+    if not _route_touches_brazil(origin, destination):
         return []
 
     # Cheapest known direct price (for comparison)
@@ -93,7 +96,7 @@ def _segment_params(base: dict[str, Any], origin: str, destination: str) -> dict
         "origin": origin,
         "destination": destination,
         "return_date": None,   # segments are always one-way
-        "limit": 5,
+        "limit": 10,           # mais opcoes por trecho == mais chance de achar a tarifa mais barata
         "_is_segment": True,   # prevents recursive multi-segment calls
     }
 
@@ -154,10 +157,11 @@ def _merge_segments(
     }
 
 
-def _origin_is_domestic(iata: str) -> bool:
-    """Check if the origin airport is in the Brazilian network."""
+def _route_touches_brazil(origin: str, destination: str) -> bool:
+    """True if origin and/or destination is a known Brazilian airport —
+    i.e. a connection through a Brazilian hub can plausibly shorten the trip."""
     from services.air_network import get_region
-    return get_region(iata) is not None
+    return get_region(origin) is not None or get_region(destination) is not None
 
 
 def _min_price(results: list[dict[str, Any]]) -> float | None:

@@ -114,10 +114,42 @@ def search_all_providers(search_params: dict[str, Any]) -> list[dict[str, Any]]:
         }
         results.extend(_demo_results(search_params))
 
-    # ── Gemini (apoio/fallback) — so aciona quando a Travelpayouts (fonte de
-    # precos reais) ainda nao trouxe nenhuma cotacao real para a rota/data.
+    # ── Tolerancia de datas (controlada pelo usuario) ────────────────────────
+    # Preco de passagem varia bastante de um dia para o outro. Quando o
+    # usuario aceita ver datas vizinhas, varremos +/- N dias reais na
+    # Travelpayouts e somamos ao resultado — marcado para a UI nunca disfarçar
+    # que aquela tarifa e de outro dia.
+    flex_days = int(search_params.get("date_flex_days") or 0)
+    if not is_segment and flex_days > 0 and provider.is_configured():
+        try:
+            flex_results = provider.search_flexible_dates(
+                origin=search_params["origin"],
+                destination=search_params["destination"],
+                departure_date=search_params["departure_date"],
+                return_date=search_params.get("return_date"),
+                flex_days=flex_days,
+                currency=search_params.get("currency", "BRL"),
+                limit_per_day=10,
+            )
+            if flex_results:
+                results.extend(flex_results)
+                _LAST_PROVIDER_DIAGNOSTIC["date_flex"] = (
+                    f"{len(flex_results)} cotacao(oes) extras em datas vizinhas "
+                    f"(+/- {flex_days} dia(s))."
+                )
+        except TravelPayoutsProviderError:
+            pass
+
+    # ── Gemini (apoio de busca via web) ───────────────────────────────────────
+    # Por padrao so aciona quando a Travelpayouts ainda nao trouxe nenhuma
+    # cotacao real para a rota/data. O usuario pode forcar "force_web_search"
+    # para sempre cruzar com uma pesquisa web extra e aumentar o alcance das
+    # fontes, mesmo quando ja ha cotacoes reais da Travelpayouts.
     gemini_msg = "nao_acionado"
-    if not is_segment and not _has_real_results(results):
+    should_run_gemini = not is_segment and (
+        not _has_real_results(results) or bool(search_params.get("force_web_search"))
+    )
+    if should_run_gemini:
         gemini_results, gemini_msg = _search_gemini(search_params)
         results.extend(gemini_results)
     else:
@@ -153,13 +185,18 @@ def search_all_providers(search_params: dict[str, Any]) -> list[dict[str, Any]]:
     direct_results = _sort_and_dedupe(results)
 
     # ── Multi-segment search via Brazilian hubs (usa Travelpayouts) ──────────
-    if not is_segment:
+    # max_connection_hubs e controlado pelo usuario: mais hubs == mais chance
+    # de achar a combinacao mais barata (o ranking em
+    # air_network.find_candidate_hubs ja devolve um leque diverso de
+    # aeroportos pelo Brasil, nao so os 2 maiores). 0 desativa a busca.
+    max_hubs = int(search_params.get("max_connection_hubs", 4) or 0)
+    if not is_segment and max_hubs > 0:
         try:
             from services.multi_segment_search import search_via_connections
             combined = search_via_connections(
                 search_params=search_params,
                 direct_search_fn=_search_segment,
-                max_hubs=2,
+                max_hubs=max_hubs,
                 direct_results=direct_results,
             )
             if combined:
