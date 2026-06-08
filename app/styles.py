@@ -1339,6 +1339,54 @@ a.buy-link {
     .result-card-action { align-items: flex-start; text-align: left; }
 }
 
+/* ── Highlight cards (Recomendado / Mais barato / Mais rapido) ─ */
+.highlight-cards-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px;
+    margin: 6px 0 18px;
+}
+.highlight-card {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    height: 100%;
+    padding: 18px 20px;
+    border-radius: var(--radar-card-radius);
+    background: var(--radar-panel);
+    border: 1px solid var(--radar-line);
+    border-top: 4px solid var(--radar-muted);
+    box-shadow: 0 14px 34px rgba(0,0,0,.22);
+    transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease;
+}
+.highlight-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 24px 50px rgba(0,0,0,.34);
+}
+.highlight-card-recommended { border-top-color: #FBBF24; }
+.highlight-card-cheapest    { border-top-color: var(--radar-teal); }
+.highlight-card-fastest     { border-top-color: #60A5FA; }
+.highlight-card-badge {
+    align-self: flex-start;
+    font-size: .76rem;
+    font-weight: 800;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: var(--radar-muted);
+}
+.highlight-card-price {
+    font-size: 1.55rem;
+    font-weight: 900;
+    color: var(--radar-ink);
+    letter-spacing: -.01em;
+}
+.highlight-card-meta { color: var(--radar-muted); font-size: .85rem; line-height: 1.4; }
+.highlight-card-miles { color: #99F6E4; font-size: .82rem; }
+.highlight-card-empty { color: var(--radar-muted); font-size: .88rem; padding: 4px 0; }
+@media (max-width: 900px) {
+    .highlight-cards-grid { grid-template-columns: 1fr; }
+}
+
 /* ── Responsive ──────────────────────────────────────────────── */
 @media (max-width: 900px) {
     .top-shell { display: block; }

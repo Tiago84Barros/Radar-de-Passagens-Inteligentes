@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 """
-Multi-segment route search across the Brazilian air network.
+Multi-segment (1-stop) route search.
 
 Given origin A and destination B, this module:
-  1. Identifies candidate hub airports C (e.g. GRU, BSB)
+  1. Identifies candidate hub airports C — Brazilian airports (GRU, BSB...)
+     for domestic/inbound routes, or large international gateways
+     (Lisbon, Madrid, Miami...) when the trip departs Brazil toward an
+     international destination, where direct flights are often absent or
+     expensive (see `air_network.find_candidate_hubs`)
   2. Searches A→C and C→B as independent one-way legs
   3. Combines the cheapest pair into a single result
   4. Returns only combined routes that are cheaper than the direct route
+     (or any real combined route, when there is no direct one at all)
 
 The caller provides a `direct_search_fn(params) -> list[dict]` so the
 same logic works for both live API and demo/fallback modes.

@@ -107,19 +107,54 @@ def _run_manual_search(form: dict) -> list[dict]:
 
 # ── Result cards ──────────────────────────────────────────────────────────────
 
-def _summary_card(column, title: str, option: dict | None, badge: str) -> None:
+_HIGHLIGHT_VARIANT_CLASSES = {
+    "recommended": "highlight-card-recommended",
+    "cheapest": "highlight-card-cheapest",
+    "fastest": "highlight-card-fastest",
+}
+
+
+def _summary_card(column, title: str, option: dict | None, badge: str, variant: str) -> None:
+    """Renders one highlight (Recomendado / Mais barato / Mais rápido) as its
+    own individual CSS card — instead of plain markdown text — so each stands
+    out visually with its own accent color and shape."""
+    import html as _html
+
+    variant_class = _HIGHLIGHT_VARIANT_CLASSES.get(variant, "")
+    badge_html = f"{badge} {_html.escape(title)}"
+
     with column:
-        st.markdown(f"#### {badge} {title}")
         if not option:
-            st.caption("Sem opções para destacar.")
+            st.markdown(
+                f"""
+                <div class="highlight-card {variant_class}">
+                    <div class="highlight-card-badge">{badge_html}</div>
+                    <div class="highlight-card-empty">Sem opções para destacar.</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
             return
-        st.markdown(f"**{format_brl(option['price_brl'])}**")
-        st.caption(
+
+        price = _html.escape(format_brl(option["price_brl"]))
+        meta = _html.escape(
             f"{get_airline_name(option.get('airline') or '')} · "
             f"{format_duration_short(option.get('duration_minutes')) or '—'} · "
             f"{format_stops(option.get('stops')) or '—'}"
         )
-        st.caption(f"≈ {format_miles(option.get('estimated_miles') or 0)}")
+        miles = _html.escape(f"≈ {format_miles(option.get('estimated_miles') or 0)}")
+
+        st.markdown(
+            f"""
+            <div class="highlight-card {variant_class}">
+                <div class="highlight-card-badge">{badge_html}</div>
+                <div class="highlight-card-price">{price}</div>
+                <div class="highlight-card-meta">{meta}</div>
+                <div class="highlight-card-miles">{miles}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
 
 def _render_result_card(option: dict, min_mile_value: float) -> None:
@@ -313,9 +348,9 @@ def _render_search_tab() -> None:
     ranking = rank_flight_options(results, prefs)
 
     cols = st.columns(3)
-    _summary_card(cols[0], "Recomendado", ranking["recommended_option"], "🏆")
-    _summary_card(cols[1], "Mais barato", ranking["cheapest_option"], "💰")
-    _summary_card(cols[2], "Mais rápido", ranking["fastest_option"], "⚡")
+    _summary_card(cols[0], "Recomendado", ranking["recommended_option"], "🏆", "recommended")
+    _summary_card(cols[1], "Mais barato", ranking["cheapest_option"], "💰", "cheapest")
+    _summary_card(cols[2], "Mais rápido", ranking["fastest_option"], "⚡", "fastest")
     st.caption(f"💡 {ranking['reason']}")
 
     st.markdown("---")

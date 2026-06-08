@@ -169,27 +169,18 @@ def search_all_providers(search_params: dict[str, Any]) -> list[dict[str, Any]]:
             "gemini_apoio": gemini_msg,
         }
 
-    # ── Marcador honesto de cobertura ─────────────────────────────────────────
-    # Distingue "rota sem cobertura nas fontes reais" de "erro/demo", para a UI
-    # poder avisar com clareza em vez de um vazio ambiguo.
-    if not _has_real_results(results):
-        _LAST_PROVIDER_DIAGNOSTIC["coverage"] = "sem_cobertura_real"
-        _LAST_PROVIDER_DIAGNOSTIC["coverage_note"] = (
-            "Nenhuma fonte real (Travelpayouts/Gemini) tem dados para esta rota/data. "
-            "Rotas de baixo trafego ou internacionais de nicho podem nao ter cobertura "
-            "gratuita disponivel."
-        )
-    else:
-        _LAST_PROVIDER_DIAGNOSTIC["coverage"] = "ok"
-
     direct_results = _sort_and_dedupe(results)
 
-    # ── Multi-segment search via Brazilian hubs (usa Travelpayouts) ──────────
+    # ── Multi-segment search via hubs nacionais e internacionais ─────────────
     # max_connection_hubs e controlado pelo usuario: mais hubs == mais chance
     # de achar a combinacao mais barata (o ranking em
     # air_network.find_candidate_hubs ja devolve um leque diverso de
-    # aeroportos pelo Brasil, nao so os 2 maiores). 0 desativa a busca.
+    # aeroportos — nacionais para rotas domesticas/chegando ao Brasil, e
+    # grandes hubs internacionais (Lisboa, Madri, Miami...) para quem sai do
+    # Brasil rumo ao exterior, onde o voo direto costuma ser caro/raro).
+    # 0 desativa a busca.
     max_hubs = int(search_params.get("max_connection_hubs", 4) or 0)
+    combined: list[dict[str, Any]] = []
     if not is_segment and max_hubs > 0:
         try:
             from services.multi_segment_search import search_via_connections
@@ -210,6 +201,21 @@ def search_all_providers(search_params: dict[str, Any]) -> list[dict[str, Any]]:
         except Exception:
             # Multi-segment failure must never break the main search
             pass
+
+    # ── Marcador honesto de cobertura ─────────────────────────────────────────
+    # Roda por ultimo (depois das rotas combinadas) — uma conexao via hub
+    # tambem e cobertura real (precos vindos da Travelpayouts), entao marcar
+    # "sem cobertura" antes dela existir gerava um aviso falso de "nada
+    # encontrado" mesmo quando a busca multi-trecho ja tinha achado algo.
+    if not _has_real_results(direct_results):
+        _LAST_PROVIDER_DIAGNOSTIC["coverage"] = "sem_cobertura_real"
+        _LAST_PROVIDER_DIAGNOSTIC["coverage_note"] = (
+            "Nenhuma fonte real (Travelpayouts/Gemini/conexoes) tem dados para "
+            "esta rota/data. Rotas de baixo trafego ou internacionais de nicho "
+            "podem nao ter cobertura gratuita disponivel."
+        )
+    else:
+        _LAST_PROVIDER_DIAGNOSTIC["coverage"] = "ok"
 
     return direct_results
 

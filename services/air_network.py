@@ -44,6 +44,20 @@ SECONDARY_HUBS: list[str] = ["SSA", "FOR", "REC", "MAO", "BEL", "CWB", "POA", "F
 
 ALL_HUBS: list[str] = PRIMARY_HUBS + SECONDARY_HUBS
 
+# ─── International gateway hubs ───────────────────────────────────────────────
+# Grandes hubs de conexao FORA do Brasil. Quando a viagem sai do Brasil rumo a
+# um destino internacional sem voo direto (ou caro), conectar por aeroportos
+# domesticos brasileiros (CGH, BSB...) nao faz sentido — eles nao tem voos
+# internacionais para la. O que de fato baixa o preco/abre opcao e conectar
+# por grandes hubs internacionais com boa malha de continuacao, ex.:
+# GRU -> LIS -> <Europa>, GRU -> MIA -> <EUA>, GRU -> PTY -> <Americas>.
+INTERNATIONAL_HUBS: list[str] = [
+    "LIS", "MAD", "CDG", "FRA", "AMS",   # portas de entrada na Europa
+    "MIA", "JFK", "ATL", "PTY", "BOG",   # America do Norte / Central
+    "LIM", "SCL", "EZE",                 # hubs regionais na America do Sul
+    "DXB", "IST", "DOH",                 # pontes de longo curso para Asia/Africa/Oceania
+]
+
 # ─── Preferred hubs per route type ────────────────────────────────────────────
 # Key: (origin_region, destination_region)
 # Value: ordered list of hubs to try (most promising first)
@@ -89,13 +103,23 @@ def find_candidate_hubs(
     """
     Return a ranked list of hub airports to try as 1-stop connections.
 
-    Builds a wider, more diverse pool than a single curated pair lookup —
-    editorial picks for the region pair come first (most promising), then the
-    nationally-connected primary hubs, then secondary hubs based in the
-    origin/destination regions, then generic fallbacks. This way, raising
-    `max_hubs` actually surfaces *different* airports across Brazil instead of
-    repeating the same two — maximizing the chance of finding a cheaper
-    combined route, even when it means changing planes along the way.
+    Two distinct strategies, chosen by route shape:
+
+    - Outbound international (Brazilian origin, non-Brazilian destination):
+      candidates come from `INTERNATIONAL_HUBS` — large long-haul connecting
+      airports abroad (LIS, MAD, MIA, PTY...). Routing through another
+      Brazilian airport here is pointless (e.g. CGH has no flights to Europe);
+      the international gateways are where combined fares actually appear.
+
+    - Domestic / inbound-international (destination is Brazilian, or neither
+      side is): builds a wider, more diverse pool than a single curated pair
+      lookup — editorial picks for the region pair come first (most
+      promising), then the nationally-connected primary hubs, then secondary
+      hubs based in the origin/destination regions, then generic fallbacks.
+      This way, raising `max_hubs` actually surfaces *different* airports
+      across Brazil instead of repeating the same two — maximizing the chance
+      of finding a cheaper combined route, even when it means changing planes
+      along the way.
 
     Excludes origin and destination from the result. Capped at max_hubs entries.
     """
@@ -104,6 +128,15 @@ def find_candidate_hubs(
 
     origin_region = get_region(origin)
     dest_region = get_region(destination)
+
+    # Saida internacional do Brasil (origem domestica, destino fora do Brasil):
+    # conectar via outro aeroporto brasileiro nao ajuda (ex.: CGH nao tem voo
+    # para o exterior). O que de fato amplia o alcance e tentar grandes hubs
+    # internacionais — e e exatamente onde voos internacionais "nao aparecem"
+    # quando so olhamos a malha domestica brasileira.
+    if origin_region is not None and dest_region is None:
+        candidates = [h for h in INTERNATIONAL_HUBS if h not in (origin, destination)]
+        return candidates[:max_hubs]
 
     ranked: list[str] = []
 
