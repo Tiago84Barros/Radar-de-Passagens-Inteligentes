@@ -246,19 +246,22 @@ def _render_search_tab() -> None:
                 "amplas demoram um pouco mais, mas aumentam a chance de achar "
                 "um preço melhor."
             )
-            date_flex_days = st.slider(
+            _FLEX_OPTIONS = ["0", "2", "5", "7", "10", "15 (mês inteiro)"]
+            _FLEX_VALUES   = { "0": 0, "2": 2, "5": 5, "7": 7, "10": 10, "15 (mês inteiro)": 15 }
+            flex_label = st.select_slider(
                 "Tolerância de datas (dias para cada lado)",
-                min_value=0,
-                max_value=5,
-                value=0,
-                step=1,
+                options=_FLEX_OPTIONS,
+                value="0",
                 help=(
-                    "Além da data escolhida, também busca tarifas reais nos dias "
-                    "vizinhos (ex.: 2 = de -2 a +2 dias). Preço de passagem varia "
-                    "bastante de um dia para o outro — alargar a janela aumenta a "
-                    "chance de achar algo bem mais barato perto da data desejada."
+                    "Além da data escolhida, busca tarifas nos dias vizinhos. "
+                    "Ex.: '5' = de -5 a +5 dias em torno da data de ida. "
+                    "'Mês inteiro' (±15 dias) cobre praticamente todo o mês, "
+                    "aumentando muito a chance de achar uma tarifa publicada."
                 ),
             )
+            date_flex_days = _FLEX_VALUES[flex_label]
+            if date_flex_days == 15:
+                st.caption("🗓️ Buscando em qualquer dia do mês — pode demorar um pouco mais.")
             max_connection_hubs = st.slider(
                 "Aeroportos de conexão a tentar",
                 min_value=0,
