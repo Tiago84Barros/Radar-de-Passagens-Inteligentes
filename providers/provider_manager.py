@@ -24,14 +24,18 @@ _LAST_PROVIDER_DIAGNOSTIC: dict[str, Any] = {
 
 
 def _search_gemini(search_params: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
-    """Gemini + Google Search — apoio de analise/fallback quando a Travelpayouts
-    (fonte de precos reais) nao retorna cotacoes para a rota/data. Failure-safe:
-    retorna ([], msg) em qualquer erro, nunca derruba o pipeline."""
+    """Gemini + Google Search — provider primario de busca de tarifas.
+    Failure-safe: retorna ([], msg) em qualquer erro, nunca derruba o pipeline."""
     try:
         from providers.gemini_search_provider import GeminiSearchProvider
         gemini = GeminiSearchProvider()
         if not gemini.is_configured():
             return [], "nao_configurado"
+        # Ativa busca por mes inteiro quando: (a) o usuario marcou o checkbox
+        # "Pesquisar o mes inteiro" ou (b) selecionou tolerancia >= 14 dias no
+        # slider — ambos sinalizam que datas flexiveis sao bem-vindas.
+        flex_days = int(search_params.get("date_flex_days") or 0)
+        flexible_month = bool(search_params.get("flexible_month")) or flex_days >= 14
         results = gemini.search_flights(
             origin=search_params["origin"],
             destination=search_params["destination"],
@@ -40,11 +44,12 @@ def _search_gemini(search_params: dict[str, Any]) -> tuple[list[dict[str, Any]],
             currency=search_params.get("currency", "BRL"),
             adults=int(search_params.get("adults") or search_params.get("passengers") or 1),
             limit=search_params.get("limit", 20),
+            flexible_month=flexible_month,
         )
         for r in results:
             r.setdefault("source", "gemini_web_search")
             r.setdefault("provider", "gemini_web_search")
-        msg = f"{len(results)} cotacao(oes) via Gemini (apoio)" if results else "Gemini nao retornou cotacoes de apoio"
+        msg = f"{len(results)} cotacao(oes) via Gemini" if results else "Gemini nao retornou cotacoes"
         return results, msg
     except Exception as exc:  # noqa: BLE001
         return [], f"erro Gemini: {str(exc)[:120]}"
@@ -73,6 +78,32 @@ def search_all_providers(search_params: dict[str, Any]) -> list[dict[str, Any]]:
     provider = TravelPayoutsProvider()
     results: list[dict[str, Any]] = []
 
+    # ── Gemini (provider primario) ────────────────────────────────────────────
+    # Tenta primeiro porque cobre rotas de nicho/datas distantes que a
+    # Travelpayouts frequentemente nao tem (cache vazio). O Travelpayouts entra
+    # como apoio/fallback a seguir.
+    gemini_results_primary, gemini_msg_primary = _search_gemini(search_params)
+    results.extend(gemini_results_primary)
+    if gemini_results_primary:
+        _LAST_PROVIDER_DIAGNOSTIC = {
+            "provider": "gemini_web_search",
+            "status": "real_ok",
+            "message": f"{len(gemini_results_primary)} cotacao(oes) recebidas via Gemini.",
+        }
+    elif gemini_msg_primary == "nao_configurado":
+        _LAST_PROVIDER_DIAGNOSTIC = {
+            "provider": "gemini_web_search",
+            "status": "not_configured",
+            "message": "GEMINI_API_KEY ausente; buscando via Travelpayouts.",
+        }
+    else:
+        _LAST_PROVIDER_DIAGNOSTIC = {
+            "provider": "gemini_web_search",
+            "status": "real_empty",
+            "message": gemini_msg_primary,
+        }
+
+    # ── Travelpayouts (apoio/fallback) ────────────────────────────────────────
     if provider.is_configured():
         try:
             tp_results = provider.search_flights(
@@ -85,32 +116,28 @@ def search_all_providers(search_params: dict[str, Any]) -> list[dict[str, Any]]:
             )
             results.extend(tp_results)
             if tp_results:
-                _LAST_PROVIDER_DIAGNOSTIC = {
-                    "provider": provider.name,
-                    "status": "real_ok",
-                    "message": f"{len(tp_results)} cotacao(oes) reais recebidas da Travelpayouts.",
-                }
-            else:
-                _LAST_PROVIDER_DIAGNOSTIC = {
-                    "provider": provider.name,
-                    "status": "real_empty",
-                    "message": "Travelpayouts respondeu, mas nao retornou cotacoes para essa rota/data.",
-                }
+                if gemini_results_primary:
+                    _LAST_PROVIDER_DIAGNOSTIC["travelpayouts_apoio"] = (
+                        f"{len(tp_results)} cotacao(oes) adicionais via Travelpayouts."
+                    )
+                else:
+                    _LAST_PROVIDER_DIAGNOSTIC = {
+                        "provider": "travelpayouts",
+                        "status": "real_ok",
+                        "message": f"{len(tp_results)} cotacao(oes) via Travelpayouts (Gemini sem resultado).",
+                    }
         except TravelPayoutsProviderError as exc:
             message = str(exc)
             if exc.status_code:
                 message = f"{message} HTTP {exc.status_code}."
-            _LAST_PROVIDER_DIAGNOSTIC = {
-                "provider": provider.name,
-                "status": "real_failed_fallback",
-                "message": message,
-            }
-            results.extend(_demo_results(search_params, provider_name="travelpayouts_demo_fallback", fallback_reason=message))
-    else:
+            _LAST_PROVIDER_DIAGNOSTIC["travelpayouts_erro"] = message
+            if not results:
+                results.extend(_demo_results(search_params, provider_name="travelpayouts_demo_fallback", fallback_reason=message))
+    elif not results:
         _LAST_PROVIDER_DIAGNOSTIC = {
-            "provider": provider.name,
+            "provider": "demo",
             "status": "demo_no_token",
-            "message": "TRAVELPAYOUTS_API_TOKEN nao configurado; usando modo demonstracao.",
+            "message": "Gemini e Travelpayouts sem resultado/configuracao; modo demonstracao.",
         }
         results.extend(_demo_results(search_params))
 
@@ -120,7 +147,11 @@ def search_all_providers(search_params: dict[str, Any]) -> list[dict[str, Any]]:
     # Travelpayouts e somamos ao resultado — marcado para a UI nunca disfarçar
     # que aquela tarifa e de outro dia.
     flex_days = int(search_params.get("date_flex_days") or 0)
-    if not is_segment and flex_days > 0 and provider.is_configured():
+    # Otimizacao: flex_days >= 14 ("mes inteiro") — o search_flights da
+    # Travelpayouts ja fez uma busca por mes inteiro internamente como passo 2
+    # (month_fallback), entao nao ha ganho em fazer mais 30 chamadas dia a dia;
+    # so executa o loop de datas quando a janela e pequena (< 14 dias).
+    if not is_segment and 0 < flex_days < 14 and provider.is_configured():
         try:
             flex_results = provider.search_flexible_dates(
                 origin=search_params["origin"],
@@ -139,35 +170,6 @@ def search_all_providers(search_params: dict[str, Any]) -> list[dict[str, Any]]:
                 )
         except TravelPayoutsProviderError:
             pass
-
-    # ── Gemini (apoio de busca via web) ───────────────────────────────────────
-    # Por padrao so aciona quando a Travelpayouts ainda nao trouxe nenhuma
-    # cotacao real para a rota/data. O usuario pode forcar "force_web_search"
-    # para sempre cruzar com uma pesquisa web extra e aumentar o alcance das
-    # fontes, mesmo quando ja ha cotacoes reais da Travelpayouts.
-    gemini_msg = "nao_acionado"
-    should_run_gemini = not is_segment and (
-        not _has_real_results(results) or bool(search_params.get("force_web_search"))
-    )
-    if should_run_gemini:
-        gemini_results, gemini_msg = _search_gemini(search_params)
-        results.extend(gemini_results)
-    else:
-        gemini_results = []
-
-    if gemini_msg != "nao_configurado" and gemini_msg != "nao_acionado":
-        _LAST_PROVIDER_DIAGNOSTIC["gemini_apoio"] = gemini_msg
-
-    if gemini_results:
-        _LAST_PROVIDER_DIAGNOSTIC = {
-            "provider": "hybrid",
-            "status": "hybrid_ok",
-            "message": (
-                f"{len(results)} cotacao(oes) coletadas: Travelpayouts (fonte de precos) "
-                f"+ Gemini (apoio de busca, pois a Travelpayouts nao retornou nada para esta rota)."
-            ),
-            "gemini_apoio": gemini_msg,
-        }
 
     direct_results = _sort_and_dedupe(results)
 
