@@ -24,15 +24,40 @@ logger = logging.getLogger(__name__)
 DEFAULT_MODEL = "gemini-2.5-flash"
 
 SYSTEM_PROMPT = (
-    "Voce e um assistente de pesquisa de passagens aereas. Use a ferramenta de "
-    "busca do Google para encontrar tarifas reais e atuais para os criterios "
-    "informados. Responda SOMENTE com um array JSON (sem markdown, sem cercas "
-    "```, sem texto fora do JSON), onde cada item segue exatamente este formato:\n"
+    "Voce e um pesquisador de tarifas aereas que SOMENTE reporta precos "
+    "encontrados de fato na busca do Google nesta sessao — nunca estima, "
+    "arredonda ou completa com 'conhecimento previo'. Cada item da resposta "
+    "tem que vir de uma pagina real visitada durante esta pesquisa.\n\n"
+    "Estrategia de busca obrigatoria (faca VARIAS consultas, nunca uma so):\n"
+    "1. Pesquise o trecho pedido em pelo menos 4 fontes distintas, priorizando: "
+    "Google Flights, Skyscanner, Kayak, Decolar, MaxMilhas, 123Milhas e o site "
+    "oficial das companhias relevantes para a rota (LATAM, GOL, Azul, TAP, "
+    "Iberia, Air Europa, American, United, Air France/KLM, conforme o trecho).\n"
+    "2. Varie a formulacao a cada tentativa em vez de repetir a mesma busca, "
+    "por exemplo: '<origem> <destino> <data> passagem aerea preco', "
+    "'flights <ORIGEM> to <DESTINO> <data> price', "
+    "'<origem> <destino> <data> google flights', "
+    "'<origem> <destino> <data> skyscanner'. Buscas genericas tendem a trazer "
+    "paginas antigas ou sem preco — refine ate achar uma pagina com tarifa e "
+    "data explicitas.\n"
+    "3. Se nao encontrar nada para a data exata pedida, repita a busca para "
+    "ate 2 dias antes e 2 dias depois e devolva esses achados marcando a "
+    "'data_ida'/'data_volta' realmente encontrada (nunca a data pedida, se "
+    "for diferente da encontrada).\n"
+    "4. So inclua um item se tiver um link real e clicavel da pagina onde viu "
+    "o preco. Sem link real verificavel, descarte o item.\n"
+    "5. Nunca invente companhia, preco, link ou fonte. Na duvida, omita o "
+    "item — um array menor e correto vale mais que um array cheio de numeros "
+    "chutados.\n\n"
+    "Responda SOMENTE com um array JSON (sem markdown, sem cercas ```, sem "
+    "texto fora do JSON), onde cada item segue exatamente este formato:\n"
     '[{"companhia": "string", "origem": "IATA", "destino": "IATA", '
     '"data_ida": "YYYY-MM-DD", "data_volta": "YYYY-MM-DD ou null", '
     '"escalas": 0, "preco_brl": 1234.56, "link": "https://...", '
     '"fonte": "nome do site pesquisado"}]\n'
-    "Se nao encontrar nenhuma tarifa real, responda com um array vazio: []."
+    "Ordene do mais barato para o mais caro. Se, depois de seguir todos os "
+    "passos, voce nao achar nenhuma tarifa real e verificavel, responda com "
+    "um array vazio: []."
 )
 
 
@@ -117,6 +142,10 @@ class GeminiSearchProvider(BaseProvider):
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM_PROMPT,
                 tools=[types.Tool(google_search=types.GoogleSearch())],
+                # Tarefa factual (reportar precos achados, nao criar texto):
+                # temperatura baixa reduz a chance do modelo "completar" dados
+                # que nao confirmou na busca.
+                temperature=0,
             ),
         )
         return (getattr(response, "text", None) or "").strip()
@@ -173,7 +202,12 @@ def _build_user_prompt(
     return (
         f"Pesquise passagens aereas reais para o trecho {trecho}, "
         f"{adults} passageiro(s), classe {cabin}, com preco em reais (BRL). "
-        "Retorne apenas o array JSON especificado, com as melhores opcoes encontradas."
+        "Siga a estrategia de busca obrigatoria do system prompt: tente varias "
+        "fontes e formulacoes de busca antes de responder, e so retorne "
+        "tarifas que voce encontrou de fato, com link real verificavel. "
+        "Devolva ate 10 opcoes reais distintas (companhias e fontes diferentes "
+        "quando possivel), ordenadas do preco mais barato para o mais caro. "
+        "Retorne apenas o array JSON especificado — nada de texto fora dele."
     )
 
 

@@ -32,10 +32,57 @@ class TravelPayoutsProvider(BaseProvider):
         if not self.is_configured():
             return []
 
+        # 1) Tenta a data exata pedida pelo usuario primeiro. Pedir o mes
+        # inteiro de cara mascara o problema: o usuario busca um dia preciso
+        # e recebe "o mais barato em qualquer dia do mes" exibido como se
+        # fosse o resultado da busca dele — o que parece "informacao errada".
+        exact_results = self._fetch(
+            origin=origin,
+            destination=destination,
+            departure_at=_date_to_day(departure_date),
+            return_at=_date_to_day(return_date) if return_date else None,
+            return_date=return_date,
+            currency=currency,
+            limit=limit,
+        )
+        if exact_results:
+            for item in exact_results:
+                item["date_match"] = "exact"
+            return exact_results
+
+        # 2) Sem cache para o dia exato: amplia para o mes inteiro como
+        # segunda tentativa (maximiza a chance de trazer alguma cotacao real),
+        # mas marca claramente que a data exibida e "melhor achado no mes" e
+        # nao a data pedida — a UI/IA de decisao precisa avisar o usuario.
+        month_results = self._fetch(
+            origin=origin,
+            destination=destination,
+            departure_at=_date_to_month(departure_date),
+            return_at=_date_to_month(return_date) if return_date else None,
+            return_date=return_date,
+            currency=currency,
+            limit=limit,
+        )
+        for item in month_results:
+            item["date_match"] = "month_fallback"
+            item["requested_date"] = _date_to_day(departure_date)
+        return month_results
+
+    def _fetch(
+        self,
+        *,
+        origin: str,
+        destination: str,
+        departure_at: str,
+        return_at: str | None,
+        return_date: date | str | None,
+        currency: str,
+        limit: int,
+    ) -> list[dict[str, Any]]:
         params = {
             "origin": origin.upper(),
             "destination": destination.upper(),
-            "departure_at": _date_to_month(departure_date),
+            "departure_at": departure_at,
             "currency": currency.lower(),
             "limit": limit,
             "page": 1,
@@ -43,8 +90,8 @@ class TravelPayoutsProvider(BaseProvider):
             "sorting": "price",
             "one_way": "false" if return_date else "true",
         }
-        if return_date:
-            params["return_at"] = _date_to_month(return_date)
+        if return_at:
+            params["return_at"] = return_at
 
         try:
             response = requests.get(self.BASE_URL, params=params, timeout=self.timeout)
@@ -74,7 +121,7 @@ class TravelPayoutsProvider(BaseProvider):
             payload,
             origin=origin,
             destination=destination,
-            departure_date=departure_date,
+            departure_date=departure_at,
             return_date=return_date,
             currency=currency,
         )
