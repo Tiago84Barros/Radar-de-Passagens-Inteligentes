@@ -10,7 +10,7 @@ from app.location_resolver import LocationResolution, search_locations
 from app.settings import get_settings
 from app.styles import load_custom_css
 from app.db import database_diagnostics, init_db
-from data.airlines_catalog import get_airline_name
+from data.airlines_catalog import get_airline_info, get_airline_name
 from providers.provider_manager import search_all_providers
 from services import search_control_service
 from services.miles_service import (
@@ -27,6 +27,41 @@ from utils.formatters import format_date_br, format_duration_short, format_stops
 
 st.set_page_config(page_title="Radar de Passagens Inteligentes", page_icon="✈️", layout="wide")
 load_custom_css()
+
+
+def _airline_logos_html(airline_str: str | None, size: str = "normal") -> str:
+    """Retorna HTML com os logos da(s) companhia(s) aérea(s).
+
+    Aceita tanto IATA puro ("LA"), nome completo ("LATAM Airlines") quanto
+    rotas combinadas ("LATAM Airlines + GOL Linhas Aéreas (via GRU)").
+    Retorna string vazia quando não há logo disponível.
+    size: "normal" (36px) | "small" (24px) usado nos cards de destaque.
+    """
+    import html as _html
+
+    if not airline_str:
+        return ""
+
+    # Remove sufixo de hub "(via XYZ)" e divide em partes
+    raw = airline_str.split("(via ")[0].strip()
+    parts = [p.strip() for p in raw.split("+")]
+
+    height = "36" if size == "normal" else "24"
+    imgs = []
+    for part in parts[:2]:          # no máximo 2 logos lado a lado
+        info = get_airline_info(part.strip())
+        if info.get("logo_url"):
+            alt = _html.escape(info["name"])
+            src = _html.escape(info["logo_url"])
+            imgs.append(
+                f'<img class="airline-logo airline-logo-{size}" '
+                f'src="{src}" alt="{alt}" height="{height}" '
+                f'onerror="this.style.display=\'none\'">'
+            )
+
+    if not imgs:
+        return ""
+    return f'<div class="airline-logos">{"".join(imgs)}</div>'
 
 SORT_OPTIONS = {
     "Recomendados": "recomendados",
@@ -137,17 +172,20 @@ def _summary_card(column, title: str, option: dict | None, badge: str, variant: 
             return
 
         price = _html.escape(format_brl(option["price_brl"]))
+        airline_raw = option.get("airline") or ""
         meta = _html.escape(
-            f"{get_airline_name(option.get('airline') or '')} · "
+            f"{get_airline_name(airline_raw)} · "
             f"{format_duration_short(option.get('duration_minutes')) or '—'} · "
             f"{format_stops(option.get('stops')) or '—'}"
         )
         miles = _html.escape(f"≈ {format_miles(option.get('estimated_miles') or 0)}")
+        logo_html = _airline_logos_html(airline_raw, size="small")
 
         st.markdown(
             f"""
             <div class="highlight-card {variant_class}">
                 <div class="highlight-card-badge">{badge_html}</div>
+                {logo_html}
                 <div class="highlight-card-price">{price}</div>
                 <div class="highlight-card-meta">{meta}</div>
                 <div class="highlight-card-miles">{miles}</div>
@@ -164,7 +202,9 @@ def _render_result_card(option: dict, min_mile_value: float) -> None:
     miles = option.get("estimated_miles") or estimate_miles_from_cash_price(price, min_mile_value)
     cmp = compare_cash_vs_miles(price, miles, option.get("taxes") or 0.0, min_mile_value)
 
-    airline = _html.escape(get_airline_name(option.get("airline") or ""))
+    airline_raw = option.get("airline") or ""
+    airline = _html.escape(get_airline_name(airline_raw))
+    logo_html = _airline_logos_html(airline_raw, size="normal")
     origin = _html.escape(option.get("origin_iata") or "—")
     dates = _html.escape(
         f"{format_date_br(option.get('departure_date'))} → {format_date_br(option.get('return_date'))}"
@@ -185,6 +225,7 @@ def _render_result_card(option: dict, min_mile_value: float) -> None:
         f"""
         <div class="result-card">
             <div class="result-card-col result-card-airline">
+                {logo_html}
                 <div class="result-card-airline-name">{airline}</div>
                 <div class="result-card-muted">{origin}</div>
             </div>

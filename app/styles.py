@@ -1312,6 +1312,10 @@ a.buy-link {
 .result-card-route { flex: 2; min-width: 0; }
 .result-card-price { flex: 1.3; min-width: 0; }
 .result-card-action { flex: 1.1; align-items: flex-end; text-align: right; gap: 8px; }
+.airline-logos { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 5px; }
+.airline-logo { border-radius: 4px; background: #fff; padding: 2px 6px; object-fit: contain; display: block; }
+.airline-logo-normal { height: 34px; max-width: 100px; }
+.airline-logo-small  { height: 22px; max-width: 72px; }
 .result-card-airline-name { font-weight: 800; font-size: 1rem; color: var(--radar-ink); }
 .result-card-dates { font-weight: 650; font-size: .98rem; color: var(--radar-ink); }
 .result-card-price-value { font-weight: 900; font-size: 1.18rem; color: var(--radar-ink); letter-spacing: -.01em; }
