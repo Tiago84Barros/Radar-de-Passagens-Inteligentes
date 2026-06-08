@@ -40,6 +40,7 @@ def _search_gemini(search_params: dict[str, Any]) -> tuple[list[dict[str, Any]],
             currency=search_params.get("currency", "BRL"),
             adults=int(search_params.get("adults") or search_params.get("passengers") or 1),
             limit=search_params.get("limit", 20),
+            flexible_month=bool(search_params.get("flexible_month")),
         )
         for r in results:
             r.setdefault("source", "gemini_web_search")

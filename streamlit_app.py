@@ -28,6 +28,11 @@ from utils.formatters import format_date_br, format_duration_short, format_stops
 st.set_page_config(page_title="Radar de Passagens Inteligentes", page_icon="✈️", layout="wide")
 load_custom_css()
 
+_MONTHS_BR = {
+    1: "janeiro", 2: "fevereiro", 3: "março", 4: "abril", 5: "maio", 6: "junho",
+    7: "julho", 8: "agosto", 9: "setembro", 10: "outubro", 11: "novembro", 12: "dezembro",
+}
+
 SORT_OPTIONS = {
     "Recomendados": "recomendados",
     "Menor preço": "menor_preco",
@@ -93,6 +98,7 @@ def _run_manual_search(form: dict) -> list[dict]:
         "destination": form["destination_iata"],
         "departure_date": form["departure_date"],
         "return_date": form.get("return_date"),
+        "flexible_month": form.get("flexible_month", False),
         "adults": form.get("adults", 1),
         "passengers": form.get("adults", 1),
         "currency": "BRL",
@@ -162,6 +168,22 @@ def _render_search_tab() -> None:
         return_date = None
         if trip_type == "Ida e volta":
             return_date = col_b.date_input("Volta", value=departure_date + timedelta(days=7), format="DD/MM/YYYY")
+        flexible_month = st.checkbox(
+            "🗓️ Pesquisar o mês inteiro (datas flexíveis)",
+            value=False,
+            help=(
+                "Em vez de buscar só a data exata escolhida, procura as melhores tarifas "
+                "em qualquer dia do mês de ida informado, mantendo a duração aproximada da viagem. "
+                "Útil para rotas/datas em que a busca por dia fechado não encontra nada."
+            ),
+        )
+        if flexible_month:
+            month_label = f"{_MONTHS_BR[departure_date.month]}/{departure_date.year}"
+            st.caption(
+                f"🔎 Vamos buscar as melhores datas em **{month_label}**"
+                + (f", com viagens de cerca de {(return_date - departure_date).days} dias" if return_date else "")
+                + "."
+            )
         adults = st.number_input("Passageiros", min_value=1, max_value=9, value=1)
 
         st.markdown("---")
@@ -187,6 +209,7 @@ def _render_search_tab() -> None:
             "destination_city": destination_res.label,
             "departure_date": departure_date,
             "return_date": return_date,
+            "flexible_month": flexible_month,
             "adults": int(adults),
             "trip_type": "round_trip" if trip_type == "Ida e volta" else "one_way",
             "max_price": max_price or None,
@@ -217,11 +240,19 @@ def _render_search_tab() -> None:
         return
 
     st.markdown(f"### {form['origin_iata']} → {form['destination_iata']}")
-    st.caption(
-        f"{format_date_br(form['departure_date'])}"
-        + (f" – {format_date_br(form['return_date'])}" if form.get("return_date") else "")
-        + f" · {form['adults']} passageiro(s)"
-    )
+    if form.get("flexible_month"):
+        dep = form["departure_date"]
+        st.caption(
+            f"🗓️ Mês inteiro: {_MONTHS_BR[dep.month]}/{dep.year}"
+            + (f" · viagens de ~{(form['return_date'] - dep).days} dias" if form.get("return_date") else "")
+            + f" · {form['adults']} passageiro(s)"
+        )
+    else:
+        st.caption(
+            f"{format_date_br(form['departure_date'])}"
+            + (f" – {format_date_br(form['return_date'])}" if form.get("return_date") else "")
+            + f" · {form['adults']} passageiro(s)"
+        )
 
     if error:
         st.error(f"Não foi possível concluir a busca: {error}")

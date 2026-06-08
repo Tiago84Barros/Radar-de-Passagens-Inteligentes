@@ -74,6 +74,7 @@ class GeminiSearchProvider(BaseProvider):
         adults: int = 1,
         cabin: str = "Economy",
         limit: int = 20,
+        flexible_month: bool = False,
     ) -> list[dict[str, Any]]:
         if not self.is_configured():
             return []
@@ -83,7 +84,7 @@ class GeminiSearchProvider(BaseProvider):
         dep = _date_to_day(departure_date)
         ret = _date_to_day(return_date) if return_date else None
 
-        prompt = _build_user_prompt(o, d, dep, ret, adults=adults, cabin=cabin)
+        prompt = _build_user_prompt(o, d, dep, ret, adults=adults, cabin=cabin, flexible_month=flexible_month)
 
         try:
             payload = self._call_gemini(prompt)
@@ -158,6 +159,17 @@ class GeminiSearchProvider(BaseProvider):
         return results[: kwargs.get("limit", 20)]
 
 
+_MONTH_NAMES_PT = {
+    1: "janeiro", 2: "fevereiro", 3: "marco", 4: "abril", 5: "maio", 6: "junho",
+    7: "julho", 8: "agosto", 9: "setembro", 10: "outubro", 11: "novembro", 12: "dezembro",
+}
+
+
+def _month_label(day: str) -> str:
+    d = date.fromisoformat(day)
+    return f"{_MONTH_NAMES_PT.get(d.month, d.month)} de {d.year}"
+
+
 def _build_user_prompt(
     origin: str,
     destination: str,
@@ -166,7 +178,28 @@ def _build_user_prompt(
     *,
     adults: int,
     cabin: str,
+    flexible_month: bool = False,
 ) -> str:
+    if flexible_month:
+        month_label = _month_label(departure_date)
+        duration_days = None
+        if return_date:
+            duration_days = (date.fromisoformat(return_date) - date.fromisoformat(departure_date)).days
+
+        trecho = f"{origin} -> {destination}, com ida em qualquer dia de {month_label}"
+        if duration_days:
+            trecho += f" e permanencia de aproximadamente {duration_days} dias"
+
+        return (
+            f"Pesquise passagens aereas reais e variadas para o trecho {trecho}, "
+            f"{adults} passageiro(s), classe {cabin}, com preco em reais (BRL). "
+            "Nao se limite a um unico dia: procure as melhores datas dentro desse mes "
+            "inteiro (varie a data de ida ao longo do mes) e retorne as opcoes mais "
+            "baratas encontradas, cada uma com sua data_ida e data_volta exatas (as "
+            "datas reais da oferta encontrada, nao apenas o mes). "
+            "Retorne apenas o array JSON especificado, com as melhores opcoes encontradas."
+        )
+
     trecho = f"{origin} -> {destination}, ida em {departure_date}"
     if return_date:
         trecho += f", volta em {return_date}"

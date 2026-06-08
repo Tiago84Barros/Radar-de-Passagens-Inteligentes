@@ -8,6 +8,10 @@ Uso:
     set GEMINI_API_KEY=sua-chave   (Windows)
     export GEMINI_API_KEY=sua-chave   (Linux/Mac)
     python scripts/test_gemini_search.py BEL MCO 2026-10-01 2026-10-08
+
+Para testar a busca por mes inteiro (datas flexiveis), adicione --month
+em qualquer posicao dos argumentos:
+    python scripts/test_gemini_search.py BEL MCO 2026-10-01 2026-10-08 --month
 """
 from __future__ import annotations
 
@@ -24,7 +28,8 @@ from providers.gemini_search_provider import GeminiSearchProvider, _parse_json_a
 
 
 def main() -> None:
-    args = sys.argv[1:]
+    args = [a for a in sys.argv[1:] if a != "--month"]
+    flexible_month = "--month" in sys.argv[1:]
     origin = args[0] if len(args) > 0 else "BEL"
     destination = args[1] if len(args) > 1 else "MCO"
     departure = args[2] if len(args) > 2 else (date.today() + timedelta(days=120)).isoformat()
@@ -37,8 +42,8 @@ def main() -> None:
         print("GEMINI_API_KEY nao definido no ambiente. Configure e rode novamente.")
         return
 
-    prompt = _build_prompt_preview(origin, destination, departure, return_date)
-    print(f"\n--- Prompt enviado ao Gemini ---\n{prompt}\n")
+    prompt = _build_prompt_preview(origin, destination, departure, return_date, flexible_month)
+    print(f"\n--- Prompt enviado ao Gemini (flexible_month={flexible_month}) ---\n{prompt}\n")
 
     print("--- Chamando _call_gemini (resposta crua, antes do parse) ---")
     raw_text = provider._call_gemini(prompt)
@@ -54,15 +59,16 @@ def main() -> None:
         destination=destination,
         departure_date=departure,
         return_date=return_date,
+        flexible_month=flexible_month,
     )
     print(f"{len(results)} resultado(s):")
     for r in results:
         print(r)
 
 
-def _build_prompt_preview(origin: str, destination: str, departure: str, return_date: str | None) -> str:
+def _build_prompt_preview(origin: str, destination: str, departure: str, return_date: str | None, flexible_month: bool) -> str:
     from providers.gemini_search_provider import _build_user_prompt
-    return _build_user_prompt(origin, destination, departure, return_date, adults=1, cabin="Economy")
+    return _build_user_prompt(origin, destination, departure, return_date, adults=1, cabin="Economy", flexible_month=flexible_month)
 
 
 if __name__ == "__main__":
