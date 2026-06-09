@@ -58,6 +58,45 @@ INTERNATIONAL_HUBS: list[str] = [
     "DXB", "IST", "DOH",                 # pontes de longo curso para Asia/Africa/Oceania
 ]
 
+# Destinos por regiao geopolitica — usados para escolher os hubs internacionais
+# mais proximos geograficamente do destino final.
+_DEST_REGION_HUBS: dict[str, list[str]] = {
+    # America do Norte e Central
+    "north_america": ["MIA", "JFK", "ATL", "PTY", "BOG", "GRU"],
+    # Europa
+    "europe":        ["LIS", "MAD", "CDG", "FRA", "AMS", "GRU"],
+    # America do Sul (fora do Brasil)
+    "south_america": ["GRU", "EZE", "SCL", "LIM", "BOG"],
+    # Asia, Africa, Oceania
+    "asia_africa":   ["DXB", "IST", "DOH", "LIS", "GRU"],
+}
+
+# Mapeamento IATA → regiao geopolitica para os destinos mais comuns
+_IATA_TO_WORLD_REGION: dict[str, str] = {
+    # EUA / Canada / Mexico / Caribe / America Central
+    **{k: "north_america" for k in [
+        "MIA", "JFK", "LAX", "ORD", "ATL", "MCO", "DFW", "IAH", "EWR", "BOS",
+        "SFO", "LAS", "SEA", "PHX", "DEN", "YYZ", "YVR", "MEX", "CUN", "PTY",
+        "SJO", "GUA", "HAV", "SDQ", "SJU", "NAS", "POS",
+    ]},
+    # Europa
+    **{k: "europe" for k in [
+        "LIS", "MAD", "CDG", "FRA", "AMS", "LHR", "FCO", "MXP", "BCN", "VIE",
+        "ZRH", "BRU", "MUC", "ATH", "OSL", "ARN", "CPH", "HEL", "DUB", "LGW",
+        "OPO", "SVQ", "VLC", "PMI", "NAP", "CIA", "BGY", "MAN", "EDI",
+    ]},
+    # America do Sul (fora do Brasil)
+    **{k: "south_america" for k in [
+        "EZE", "AEP", "SCL", "LIM", "BOG", "CCS", "UIO", "GYE", "MVD", "ASU",
+        "LPB",
+    ]},
+    # Asia, Oriente Medio, Africa, Oceania
+    **{k: "asia_africa" for k in [
+        "DXB", "IST", "DOH", "SIN", "BKK", "NRT", "HND", "ICN", "HKG", "PEK",
+        "PVG", "BOM", "DEL", "SYD", "MEL", "AKL", "JNB", "CAI", "CMN", "ADD",
+    ]},
+}
+
 # ─── Preferred hubs per route type ────────────────────────────────────────────
 # Key: (origin_region, destination_region)
 # Value: ordered list of hubs to try (most promising first)
@@ -130,12 +169,27 @@ def find_candidate_hubs(
     dest_region = get_region(destination)
 
     # Saida internacional do Brasil (origem domestica, destino fora do Brasil):
-    # conectar via outro aeroporto brasileiro nao ajuda (ex.: CGH nao tem voo
-    # para o exterior). O que de fato amplia o alcance e tentar grandes hubs
-    # internacionais — e e exatamente onde voos internacionais "nao aparecem"
-    # quando so olhamos a malha domestica brasileira.
+    # Estrategia em duas camadas:
+    #   1. GRU — maior hub internacional do Brasil; BEL/FOR/etc → GRU → destino
+    #      cobre a maioria das rotas internacionais LATAM/GOL com apenas 1 conexao
+    #      domestica. Excluido se ja for a origem (ex.: GRU → MCO, sem sentido).
+    #   2. Hubs internacionais geograficamente proximos do destino final
+    #      (ex.: MCO → preferir MIA/ATL, nao LIS/MAD que adicionam 8h de desvio).
     if origin_region is not None and dest_region is None:
-        candidates = [h for h in INTERNATIONAL_HUBS if h not in (origin, destination)]
+        candidates: list[str] = []
+        # Camada 1: GRU como hub domestico de saida
+        if "GRU" not in (origin, destination):
+            candidates.append("GRU")
+        # Camada 2: hubs internacionais ordenados por proximidade do destino
+        world_region = _IATA_TO_WORLD_REGION.get(destination)
+        preferred = _DEST_REGION_HUBS.get(world_region, INTERNATIONAL_HUBS) if world_region else INTERNATIONAL_HUBS
+        for h in preferred:
+            if h not in (origin, destination) and h not in candidates:
+                candidates.append(h)
+        # Fallback: qualquer hub internacional ainda nao listado
+        for h in INTERNATIONAL_HUBS:
+            if h not in (origin, destination) and h not in candidates:
+                candidates.append(h)
         return candidates[:max_hubs]
 
     ranked: list[str] = []
