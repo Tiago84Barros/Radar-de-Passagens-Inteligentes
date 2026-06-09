@@ -390,11 +390,22 @@ def _render_search_tab() -> None:
     )
 
     if error:
-        st.error(f"Não foi possível concluir a busca: {error}")
+        _err = str(error)
+        if "token" in _err.lower() or "401" in _err or "403" in _err:
+            st.error("Travelpayouts não configurado ou token inválido. Verifique o secret TRAVELPAYOUTS_API_TOKEN nas configurações do app.")
+        else:
+            st.error(f"Não foi possível consultar a API de passagens agora. Tente novamente em alguns instantes. ({_err[:200]})")
         return
     if not results:
-        st.warning("Nenhuma tarifa encontrada para esta busca. Tente outras datas ou destino.")
+        st.warning(
+            "Nenhuma tarifa encontrada para esta combinação. "
+            "Tente datas mais flexíveis, outro aeroporto ou remova filtros."
+        )
         return
+
+    _all_demo = all("demo" in str(r.get("provider") or r.get("source") or "").lower() for r in results)
+    if _all_demo:
+        st.info("⚠️ Modo demonstração — Travelpayouts não retornou tarifas reais para esta rota/data. Os valores exibidos são estimativas ilustrativas, não preços reais.")
 
     sort_label = st.selectbox("Ordenar por", list(SORT_OPTIONS.keys()), index=0)
     prefs = dict(form, sort_by=SORT_OPTIONS[sort_label])
