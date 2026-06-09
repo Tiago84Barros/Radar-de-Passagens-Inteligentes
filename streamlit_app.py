@@ -229,30 +229,30 @@ def _render_result_card(option: dict, min_mile_value: float) -> None:
         else ""
     )
 
-    st.markdown(
-        f"""
-        <div class="result-card">
-            <div class="result-card-col result-card-airline">
-                {logo_html}
-                <div class="result-card-airline-name">{airline}</div>
-                <div class="result-card-muted">{origin}</div>
-            </div>
-            <div class="result-card-col result-card-route">
-                <div class="result-card-dates">{dates}</div>
-                <div class="result-card-muted">⏱ {duration} · 🔁 {stops}</div>
-            </div>
-            <div class="result-card-col result-card-price">
-                <div class="result-card-price-value">{price_label}</div>
-                <div class="result-card-muted">{miles_label}</div>
-                {price_note_html}
-            </div>
-            <div class="result-card-col result-card-action">
-                {action_html}
-                <div class="result-card-source">Fonte: {provider}</div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    # st.html() bypasses Streamlit's Markdown parser entirely — avoids the bug
+    # where 4+ spaces of indentation or special chars in URLs (& = ? `) cause the
+    # HTML block to be treated as a Markdown code block and displayed as raw text.
+    st.html(
+        f'<div class="result-card">'
+        f'<div class="result-card-col result-card-airline">'
+        f'{logo_html}'
+        f'<div class="result-card-airline-name">{airline}</div>'
+        f'<div class="result-card-muted">{origin}</div>'
+        f'</div>'
+        f'<div class="result-card-col result-card-route">'
+        f'<div class="result-card-dates">{dates}</div>'
+        f'<div class="result-card-muted">&#9203; {duration} &middot; &#128257; {stops}</div>'
+        f'</div>'
+        f'<div class="result-card-col result-card-price">'
+        f'<div class="result-card-price-value">{price_label}</div>'
+        f'<div class="result-card-muted">{miles_label}</div>'
+        f'{price_note_html}'
+        f'</div>'
+        f'<div class="result-card-col result-card-action">'
+        f'{action_html}'
+        f'<div class="result-card-source">Fonte: {provider}</div>'
+        f'</div>'
+        f'</div>'
     )
 
 
