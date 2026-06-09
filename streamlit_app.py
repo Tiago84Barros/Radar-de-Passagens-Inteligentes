@@ -11,7 +11,7 @@ from app.settings import get_settings
 from app.styles import load_custom_css
 from app.db import database_diagnostics, init_db
 from data.airlines_catalog import get_airline_info, get_airline_name
-from providers.provider_manager import search_all_providers
+from providers.provider_manager import search_all_providers, get_last_provider_diagnostic
 from services import search_control_service
 from services.miles_service import (
     DEFAULT_CENTS_PER_MILE,
@@ -397,10 +397,21 @@ def _render_search_tab() -> None:
             st.error(f"Não foi possível consultar a API de passagens agora. Tente novamente em alguns instantes. ({_err[:200]})")
         return
     if not results:
+        diag = get_last_provider_diagnostic()
         st.warning(
             "Nenhuma tarifa encontrada para esta combinação. "
             "Tente datas mais flexíveis, outro aeroporto ou remova filtros."
         )
+        if diag.get("provider") == "gemini_web_search" and diag.get("status") == "not_configured":
+            st.info(
+                "💡 A busca via IA (Gemini) está desativada neste app — ela ajuda "
+                "justamente em rotas de nicho como esta, onde a Travelpayouts "
+                "ainda não tem cache de preços. Configure o secret "
+                "`GEMINI_API_KEY` para ativar essa fonte adicional."
+            )
+        coverage_note = diag.get("coverage_note")
+        if coverage_note:
+            st.caption(f"🔎 Diagnóstico: {coverage_note}")
         return
 
     _all_demo = all("demo" in str(r.get("provider") or r.get("source") or "").lower() for r in results)
