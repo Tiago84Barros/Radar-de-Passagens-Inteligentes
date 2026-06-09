@@ -88,7 +88,10 @@ def search_via_connections(
         if direct_min is not None and combined_price >= direct_min:
             continue
 
-        combined = _merge_segments(best_leg1, best_leg2, origin, destination, hub)
+        combined = _merge_segments(
+            best_leg1, best_leg2, origin, destination, hub,
+            return_date=search_params.get("return_date"),
+        )
         combined_results.append(combined)
 
     return combined_results
@@ -112,8 +115,15 @@ def _merge_segments(
     origin: str,
     destination: str,
     hub: str,
+    return_date=None,
 ) -> dict[str, Any]:
-    """Combine two one-way legs into a single combined route dict."""
+    """Combine two one-way legs into a single combined route dict.
+
+    The combined price covers only the outbound journey (leg1 + leg2 via hub).
+    When the original search was a round trip, return_date is passed so the card
+    displays the correct return date; the price_note field signals to the UI that
+    the return leg price is not included in this estimate.
+    """
     price = float(leg1.get("price") or 0) + float(leg2.get("price") or 0)
 
     dur1 = int(leg1.get("duration_minutes") or 0)
@@ -129,6 +139,11 @@ def _merge_segments(
 
     provider = f"combinado:{leg1.get('provider', 'tp')}+{leg2.get('provider', 'tp')}"
 
+    # Normalise return_date to YYYY-MM-DD string (or None)
+    _rd: str | None = None
+    if return_date:
+        _rd = return_date.isoformat()[:10] if hasattr(return_date, "isoformat") else str(return_date)[:10]
+
     return {
         "provider": provider,
         "source": f"combinado_via_{hub}",
@@ -137,7 +152,10 @@ def _merge_segments(
         "via_hub": hub,
         "route_label": hub_route_label(origin, hub, destination),
         "departure_date": leg1.get("departure_date"),
-        "return_date": None,
+        "return_date": _rd,
+        # Price covers only the outbound journey — flag this for the UI so users
+        # understand the return leg is not included in this estimate.
+        "price_note": "preco_somente_ida" if _rd else None,
         "airline": f"{airline_label} (via {hub})",
         "price": price,
         "currency": leg1.get("currency", "BRL"),

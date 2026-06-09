@@ -118,6 +118,7 @@ def _offer_to_option(offer: dict, min_mile_value: float) -> dict:
         "origin_iata": offer.get("origin") or "",
         "destination_iata": offer.get("destination") or "",
         "score": int(offer.get("score") or 0),
+        "price_note": offer.get("price_note"),
     }
     return enrich_deal_with_miles(deal, min_mile_value)
 
@@ -221,6 +222,13 @@ def _render_result_card(option: dict, min_mile_value: float) -> None:
     else:
         action_html = '<span class="result-card-cta result-card-cta-disabled">Veja mais</span>'
 
+    price_note = option.get("price_note") or ""
+    price_note_html = (
+        '<div class="result-card-price-note">⚠️ Preço estimado só para a ida (conexão via hub)</div>'
+        if price_note == "preco_somente_ida"
+        else ""
+    )
+
     st.markdown(
         f"""
         <div class="result-card">
@@ -236,6 +244,7 @@ def _render_result_card(option: dict, min_mile_value: float) -> None:
             <div class="result-card-col result-card-price">
                 <div class="result-card-price-value">{price_label}</div>
                 <div class="result-card-muted">{miles_label}</div>
+                {price_note_html}
             </div>
             <div class="result-card-col result-card-action">
                 {action_html}

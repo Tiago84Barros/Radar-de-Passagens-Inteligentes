@@ -1321,6 +1321,7 @@ a.buy-link {
 .result-card-price-value { font-weight: 900; font-size: 1.18rem; color: var(--radar-ink); letter-spacing: -.01em; }
 .result-card-muted { color: var(--radar-muted); font-size: .82rem; line-height: 1.4; }
 .result-card-source { color: var(--radar-muted); font-size: .74rem; }
+.result-card-price-note { color: var(--radar-amber); font-size: .74rem; margin-top: 4px; }
 .result-card-cta {
     display: inline-block;
     padding: 8px 18px;
