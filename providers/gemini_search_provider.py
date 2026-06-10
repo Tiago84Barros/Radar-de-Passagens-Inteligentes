@@ -21,7 +21,11 @@ from providers.base_provider import BaseProvider
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "gemini-2.5-flash"
+# Modelo principal e, em caso de quota esgotada (429 RESOURCE_EXHAUSTED) no
+# primeiro, modelos alternativos com cota gratuita propria para tentar antes
+# de desistir e cair para o Travelpayouts.
+DEFAULT_MODEL = "gemini-2.0-flash"
+FALLBACK_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash-lite"]
 
 SYSTEM_PROMPT = (
     "Voce e um pesquisador de tarifas aereas que SOMENTE reporta precos "
@@ -144,19 +148,35 @@ class GeminiSearchProvider(BaseProvider):
             raise GeminiSearchProviderError("SDK 'google-genai' nao instalado.") from exc
 
         client = genai.Client(api_key=self.settings.gemini_api_key)
-        response = client.models.generate_content(
-            model=self.model,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
-                tools=[types.Tool(google_search=types.GoogleSearch())],
-                # Tarefa factual (reportar precos achados, nao criar texto):
-                # temperatura baixa reduz a chance do modelo "completar" dados
-                # que nao confirmou na busca.
-                temperature=0,
-            ),
+        config = types.GenerateContentConfig(
+            system_instruction=SYSTEM_PROMPT,
+            tools=[types.Tool(google_search=types.GoogleSearch())],
+            # Tarefa factual (reportar precos achados, nao criar texto):
+            # temperatura baixa reduz a chance do modelo "completar" dados
+            # que nao confirmou na busca.
+            temperature=0,
         )
-        return (getattr(response, "text", None) or "").strip()
+
+        # Se o modelo principal estiver com a cota gratuita esgotada (429
+        # RESOURCE_EXHAUSTED), tenta os modelos alternativos antes de desistir
+        # — cada modelo tem cota diaria propria na conta gratuita.
+        last_exc: Exception | None = None
+        for model in [self.model, *FALLBACK_MODELS]:
+            try:
+                response = client.models.generate_content(
+                    model=model,
+                    contents=prompt,
+                    config=config,
+                )
+                return (getattr(response, "text", None) or "").strip()
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                if "RESOURCE_EXHAUSTED" in str(exc) or "429" in str(exc):
+                    logger.info("Modelo %s sem cota; tentando proximo.", model)
+                    continue
+                raise
+
+        raise last_exc or GeminiSearchProviderError("Todos os modelos Gemini falharam.")
 
     def normalize_response(self, payload: Any, **kwargs: Any) -> list[dict[str, Any]]:
         items = _parse_json_array(payload)
