@@ -591,9 +591,9 @@ def _render_settings_tab() -> None:
     settings = get_settings()
     diag = database_diagnostics()
     rows = [
-        ("Gemini (busca web de tarifas)", bool(settings.gemini_api_key)),
-        ("OpenAI / ChatGPT (busca web de tarifas)", bool(settings.openai_api_key)),
-        ("Travelpayouts (fallback de preços)", bool(settings.travelpayouts_api_token)),
+        ("Gemini (busca web de tarifas)", bool(getattr(settings, "gemini_api_key", None))),
+        ("OpenAI / ChatGPT (busca web de tarifas)", bool(getattr(settings, "openai_api_key", None))),
+        ("Travelpayouts (fallback de preços)", bool(getattr(settings, "travelpayouts_api_token", None))),
         ("Telegram", bool(settings.telegram_bot_token and settings.telegram_chat_id)),
         ("Banco de dados", diag["driver"] != "-"),
         ("GitHub Actions (executar agora)", github_trigger_configured()),
