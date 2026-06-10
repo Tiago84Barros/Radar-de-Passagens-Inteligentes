@@ -409,6 +409,23 @@ def _render_search_tab() -> None:
                 "ainda não tem cache de preços. Configure o secret "
                 "`GEMINI_API_KEY` para ativar essa fonte adicional."
             )
+        _gem_msg = str(diag.get("message") or "")
+        if "RESOURCE_EXHAUSTED" in _gem_msg or "429" in _gem_msg:
+            if "prepayment" in _gem_msg or "credits are depleted" in _gem_msg:
+                st.error(
+                    "🚫 A busca via Gemini falhou: os créditos pré-pagos do projeto "
+                    "Google AI Studio desta chave estão esgotados. Recarregue os "
+                    "créditos ou troque a `GEMINI_API_KEY` por uma chave de um "
+                    "projeto no nível gratuito em https://aistudio.google.com/apikey."
+                )
+            else:
+                st.error(
+                    "🚫 A busca via Gemini falhou: limite de uso da API atingido "
+                    "(429). Aguarde a renovação da cota ou verifique o billing do "
+                    "projeto em https://ai.studio/projects."
+                )
+        elif diag.get("status") == "real_empty" and _gem_msg.startswith("erro Gemini"):
+            st.error(f"🚫 A busca via Gemini falhou: {_gem_msg}")
         coverage_note = diag.get("coverage_note")
         if coverage_note:
             st.caption(f"🔎 Diagnóstico: {coverage_note}")
