@@ -119,6 +119,12 @@ def _offer_to_option(offer: dict, min_mile_value: float) -> dict:
         "destination_iata": offer.get("destination") or "",
         "score": int(offer.get("score") or 0),
         "price_note": offer.get("price_note"),
+        # Campos ricos vindos da busca Gemini (podem ser None nos demais providers)
+        "price_outbound": offer.get("price_outbound"),
+        "price_return": offer.get("price_return"),
+        "connections": offer.get("connections") or [],
+        "miles_offer": offer.get("miles_offer"),
+        "category": offer.get("category"),
     }
     return enrich_deal_with_miles(deal, min_mile_value)
 
@@ -196,12 +202,17 @@ def _summary_card(column, title: str, option: dict | None, badge: str, variant: 
         )
 
 
+_CATEGORY_BADGES = {
+    "mais_barata": "💰 Mais barata",
+    "mais_rapida": "⚡ Mais rápida",
+    "equilibrada": "⚖️ Melhor equilíbrio",
+}
+
+
 def _render_result_card(option: dict, min_mile_value: float) -> None:
     import html as _html
 
     price = option["price_brl"]
-    miles = option.get("estimated_miles") or estimate_miles_from_cash_price(price, min_mile_value)
-    cmp = compare_cash_vs_miles(price, miles, option.get("taxes") or 0.0, min_mile_value)
 
     airline_raw = option.get("airline") or ""
     airline = _html.escape(get_airline_name(airline_raw))
@@ -211,16 +222,63 @@ def _render_result_card(option: dict, min_mile_value: float) -> None:
         f"{format_date_br(option.get('departure_date'))} → {format_date_br(option.get('return_date'))}"
     )
     duration = _html.escape(format_duration_short(option.get("duration_minutes")) or "—")
-    stops = _html.escape(format_stops(option.get("stops")) or "—")
     price_label = _html.escape(format_brl(price))
-    miles_label = _html.escape(f"≈ {format_miles(miles)} · {cmp['recommendation']}")
     provider = _html.escape(option.get("provider") or "—")
     link = option.get("booking_link") or ""
 
-    if link:
-        action_html = f'<a class="result-card-cta" href="{_html.escape(link, quote=True)}" target="_blank" rel="noopener noreferrer">Veja mais</a>'
+    # ── Categoria (mais barata / mais rápida / equilibrada) ──────────────────
+    badge = _CATEGORY_BADGES.get(str(option.get("category") or "").strip().lower())
+    badge_html = f'<div class="result-card-category">{_html.escape(badge)}</div>' if badge else ""
+
+    # ── Conexões com tempo de espera ─────────────────────────────────────────
+    connections = option.get("connections") or []
+    if connections:
+        partes = []
+        for c in connections:
+            apt = _html.escape(str(c.get("airport") or "?"))
+            espera = format_duration_short(c.get("wait_minutes")) if c.get("wait_minutes") else None
+            partes.append(f"{apt} ({espera} de espera)" if espera else apt)
+        stops_html = "&#128257; Conexão: " + " &rarr; ".join(partes)
     else:
-        action_html = '<span class="result-card-cta result-card-cta-disabled">Veja mais</span>'
+        n_stops = option.get("stops")
+        stops_html = (
+            "&#9992;&#65039; Voo direto"
+            if (n_stops is not None and int(n_stops or 0) == 0)
+            else "&#128257; " + _html.escape(format_stops(n_stops) or "—")
+        )
+
+    # ── Preço ida / volta separados (quando a fonte informa) ─────────────────
+    p_ida, p_volta = option.get("price_outbound"), option.get("price_return")
+    if p_ida and p_volta:
+        breakdown_html = (
+            f'<div class="result-card-muted">Ida {_html.escape(format_brl(p_ida))} · '
+            f'Volta {_html.escape(format_brl(p_volta))}</div>'
+        )
+    elif p_ida:
+        breakdown_html = f'<div class="result-card-muted">Ida {_html.escape(format_brl(p_ida))}</div>'
+    else:
+        breakdown_html = ""
+
+    # ── Milhas: preço real do programa quando o Gemini achou; senão estimativa ─
+    miles_offer = option.get("miles_offer")
+    if miles_offer and miles_offer.get("amount"):
+        taxas = float(miles_offer.get("taxes_brl") or 0)
+        taxas_txt = f" + {format_brl(taxas)} de taxas" if taxas else ""
+        miles_label = _html.escape(
+            f"{format_miles(miles_offer['amount'])} no {miles_offer.get('program') or 'programa da companhia'}{taxas_txt}"
+        )
+    else:
+        miles = option.get("estimated_miles") or estimate_miles_from_cash_price(price, min_mile_value)
+        cmp = compare_cash_vs_miles(price, miles, option.get("taxes") or 0.0, min_mile_value)
+        miles_label = _html.escape(f"≈ {format_miles(miles)} (estimativa) · {cmp['recommendation']}")
+
+    if link:
+        action_html = (
+            f'<a class="result-card-cta" href="{_html.escape(link, quote=True)}" '
+            f'target="_blank" rel="noopener noreferrer">Comprar na companhia</a>'
+        )
+    else:
+        action_html = '<span class="result-card-cta result-card-cta-disabled">Sem link direto</span>'
 
     price_note = option.get("price_note") or ""
     price_note_html = (
@@ -234,6 +292,7 @@ def _render_result_card(option: dict, min_mile_value: float) -> None:
     # HTML block to be treated as a Markdown code block and displayed as raw text.
     st.html(
         f'<div class="result-card">'
+        f'{badge_html}'
         f'<div class="result-card-col result-card-airline">'
         f'{logo_html}'
         f'<div class="result-card-airline-name">{airline}</div>'
@@ -241,11 +300,13 @@ def _render_result_card(option: dict, min_mile_value: float) -> None:
         f'</div>'
         f'<div class="result-card-col result-card-route">'
         f'<div class="result-card-dates">{dates}</div>'
-        f'<div class="result-card-muted">&#9203; {duration} &middot; &#128257; {stops}</div>'
+        f'<div class="result-card-muted">&#9203; {duration}</div>'
+        f'<div class="result-card-muted">{stops_html}</div>'
         f'</div>'
         f'<div class="result-card-col result-card-price">'
         f'<div class="result-card-price-value">{price_label}</div>'
-        f'<div class="result-card-muted">{miles_label}</div>'
+        f'{breakdown_html}'
+        f'<div class="result-card-muted">&#11088; {miles_label}</div>'
         f'{price_note_html}'
         f'</div>'
         f'<div class="result-card-col result-card-action">'

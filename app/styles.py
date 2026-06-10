@@ -1291,6 +1291,7 @@ a.buy-link {
 
 /* ── Result cards (search results, comparator layout) ───────── */
 .result-card {
+    position: relative;
     display: flex;
     align-items: center;
     gap: 18px;
@@ -1322,6 +1323,15 @@ a.buy-link {
 .result-card-muted { color: var(--radar-muted); font-size: .82rem; line-height: 1.4; }
 .result-card-source { color: var(--radar-muted); font-size: .74rem; }
 .result-card-price-note { color: var(--radar-amber); font-size: .74rem; margin-top: 4px; }
+.result-card-category {
+    position: absolute;
+    top: -10px; left: 16px;
+    background: var(--radar-teal);
+    color: #06222b;
+    font-weight: 800; font-size: .72rem;
+    padding: 3px 12px; border-radius: 999px;
+    box-shadow: 0 6px 16px rgba(0,0,0,.3);
+}
 .result-card-cta {
     display: inline-block;
     padding: 8px 18px;

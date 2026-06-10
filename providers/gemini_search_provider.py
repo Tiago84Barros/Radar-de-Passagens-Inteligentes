@@ -28,48 +28,88 @@ DEFAULT_MODEL = "gemini-2.0-flash"
 FALLBACK_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash-lite"]
 
 SYSTEM_PROMPT = (
-    "Voce e um pesquisador de tarifas aereas que SOMENTE reporta precos "
-    "encontrados de fato na busca do Google nesta sessao — nunca estima, "
-    "arredonda ou completa com 'conhecimento previo'. Cada item da resposta "
-    "tem que vir de uma pagina real visitada durante esta pesquisa.\n\n"
+    "Voce e um comprador experiente de passagens aereas pesquisando para si "
+    "mesmo. Voce SOMENTE reporta precos encontrados de fato na busca do Google "
+    "nesta sessao — nunca estima, arredonda ou completa com 'conhecimento "
+    "previo'. Cada item da resposta tem que vir de uma pagina real visitada "
+    "durante esta pesquisa.\n\n"
     "Estrategia de busca obrigatoria (faca VARIAS consultas, nunca uma so):\n"
     "1. Pesquise o trecho pedido em pelo menos 4 fontes distintas, priorizando: "
-    "Google Flights, Skyscanner, Kayak, Decolar, MaxMilhas, 123Milhas e o site "
-    "oficial das companhias relevantes para a rota (LATAM, GOL, Azul, TAP, "
-    "Iberia, Air Europa, American, United, Air France/KLM, conforme o trecho).\n"
+    "Google Flights, Skyscanner, Kayak, Decolar e o site oficial das "
+    "companhias relevantes para a rota (LATAM, GOL, Azul, TAP, Iberia, "
+    "Air Europa, American, United, Delta, Copa, Avianca, Air France/KLM, "
+    "conforme o trecho).\n"
     "2. Varie a formulacao a cada tentativa em vez de repetir a mesma busca, "
     "por exemplo: '<origem> <destino> <data> passagem aerea preco', "
     "'flights <ORIGEM> to <DESTINO> <data> price', "
     "'<origem> <destino> <data> google flights', "
-    "'<origem> <destino> <data> skyscanner'. Buscas genericas tendem a trazer "
+    "'site:latam.com <origem> <destino>'. Buscas genericas tendem a trazer "
     "paginas antigas ou sem preco — refine ate achar uma pagina com tarifa e "
     "data explicitas.\n"
-    "3. Se nao encontrar nada para a data exata pedida, repita a busca para "
-    "ate 2 dias antes e 2 dias depois e devolva esses achados marcando a "
-    "'data_ida'/'data_volta' realmente encontrada (nunca a data pedida, se "
-    "for diferente da encontrada).\n"
-    "4. Para trechos internacionais saindo do Brasil: se nao achar voo direto "
-    "ou o direto estiver caro, pesquise tambem itinerarios COM CONEXAO via "
-    "grandes hubs internacionais (ex.: Lisboa, Madri, Paris, Frankfurt, "
-    "Amsterda, Miami, Nova York, Atlanta, Panama, Bogota, Lima, Santiago, "
-    "Dubai, Istambul, Doha — conforme a regiao do destino). Itinerarios com "
-    "1 conexao costumam ser bem mais baratos que o voo direto e contam como "
-    "resultado valido (preencha 'escalas' com o numero real de conexoes).\n"
-    "5. So inclua um item se tiver um link real e clicavel da pagina onde viu "
-    "o preco. Sem link real verificavel, descarte o item.\n"
-    "6. Nunca invente companhia, preco, link ou fonte. Na duvida, omita o "
+    "3. DATAS: o intervalo de dias pedido e sagrado. Se o usuario pediu "
+    "ida 10/07 e volta 17/07 (7 dias de viagem), so devolva itinerarios com "
+    "essa mesma duracao de viagem. Se nao achar nada para as datas exatas, "
+    "deslize a janela INTEIRA em ate 2 dias (ex.: 11/07-18/07), mantendo o "
+    "mesmo numero de dias — nunca devolva datas aleatorias so porque estao "
+    "baratas. Marque sempre a data realmente encontrada.\n"
+    "4. VARIEDADE: nao se limite as opcoes mais baratas. Devolva um mix "
+    "explicito: as 2-3 mais baratas (categoria 'mais_barata'), as 2-3 mais "
+    "rapidas/menos conexoes (categoria 'mais_rapida') e 1-2 com melhor "
+    "equilibrio preco x tempo (categoria 'equilibrada').\n"
+    "5. CONEXOES: para cada itinerario, liste cada conexao com o aeroporto e "
+    "o tempo de espera em minutos (ex.: GRU, 95 min). Se o voo e direto, "
+    "'conexoes' e uma lista vazia. Para trechos internacionais saindo do "
+    "Brasil sem voo direto barato, pesquise itinerarios via grandes hubs "
+    "(Lisboa, Madri, Miami, Nova York, Atlanta, Panama, Bogota, Lima, "
+    "Santiago, Dubai, Istambul, Doha — conforme a regiao do destino).\n"
+    "6. PRECOS IDA/VOLTA: em viagens de ida e volta, sempre que a fonte "
+    "mostrar os trechos separados, preencha 'preco_ida_brl' e "
+    "'preco_volta_brl' alem do total. Se a fonte so mostra o total, deixe os "
+    "trechos como null — nunca divida o total por 2.\n"
+    "7. MILHAS: pesquise tambem o preco em milhas nos programas das "
+    "companhias encontradas (Smiles para GOL, Latam Pass para LATAM, TudoAzul "
+    "para Azul, AAdvantage para American etc.). Se achar, preencha 'milhas' "
+    "com programa, quantidade e taxas em BRL. Se nao achar, deixe null.\n"
+    "8. LINK: o campo 'link' deve apontar para o SITE OFICIAL DA COMPANHIA "
+    "AEREA que opera o voo (ex.: latam.com, voegol.com.br, voeazul.com.br, "
+    "aa.com, delta.com) — nunca para agencia ou intermediario. Se voce achou "
+    "o preco num agregador, inclua o agregador apenas em 'fonte' e monte o "
+    "link da companhia para a rota/data. Companhia sempre pelo NOME COMPLETO "
+    "(ex.: 'LATAM Airlines', 'GOL Linhas Aereas', 'Azul Linhas Aereas') — "
+    "nunca sigla ou codigo IATA.\n"
+    "9. Nunca invente companhia, preco, link ou fonte. Na duvida, omita o "
     "item — um array menor e correto vale mais que um array cheio de numeros "
     "chutados.\n\n"
     "Responda SOMENTE com um array JSON (sem markdown, sem cercas ```, sem "
     "texto fora do JSON), onde cada item segue exatamente este formato:\n"
-    '[{"companhia": "string", "origem": "IATA", "destino": "IATA", '
+    '[{"companhia": "LATAM Airlines", "origem": "BEL", "destino": "MCO", '
     '"data_ida": "YYYY-MM-DD", "data_volta": "YYYY-MM-DD ou null", '
-    '"escalas": 0, "preco_brl": 1234.56, "link": "https://...", '
-    '"fonte": "nome do site pesquisado"}]\n'
-    "Ordene do mais barato para o mais caro. Se, depois de seguir todos os "
-    "passos, voce nao achar nenhuma tarifa real e verificavel, responda com "
-    "um array vazio: []."
+    '"preco_total_brl": 3850.00, "preco_ida_brl": 1900.00, '
+    '"preco_volta_brl": 1950.00, "duracao_total_minutos": 780, '
+    '"conexoes": [{"aeroporto": "GRU", "espera_minutos": 95}], '
+    '"milhas": {"programa": "Latam Pass", "quantidade": 85000, '
+    '"taxas_brl": 190.00}, "categoria": "mais_barata", '
+    '"link": "https://www.latam.com/...", "fonte": "google flights"}]\n'
+    "Campos sem dado real: use null (preco_ida_brl, preco_volta_brl, "
+    "duracao_total_minutos, milhas) ou lista vazia (conexoes). "
+    "Se, depois de seguir todos os passos, voce nao achar nenhuma tarifa "
+    "real e verificavel, responda com um array vazio: []."
 )
+
+
+class GeminiConnection(BaseModel):
+    """Uma conexao do itinerario: aeroporto e tempo de espera."""
+
+    aeroporto: str = ""
+    espera_minutos: int | None = None
+
+
+class GeminiMilesOffer(BaseModel):
+    """Preco em milhas no programa da propria companhia."""
+
+    programa: str = ""
+    quantidade: int | None = None
+    taxas_brl: float | None = None
 
 
 class GeminiFlightResult(BaseModel):
@@ -80,10 +120,19 @@ class GeminiFlightResult(BaseModel):
     destino: str
     data_ida: str
     data_volta: str | None = None
-    escalas: int | None = None
-    preco_brl: float = Field(gt=0)
+    preco_total_brl: float | None = Field(default=None, gt=0)
+    preco_ida_brl: float | None = None
+    preco_volta_brl: float | None = None
+    duracao_total_minutos: int | None = None
+    conexoes: list[GeminiConnection] = Field(default_factory=list)
+    milhas: GeminiMilesOffer | None = None
+    categoria: str = ""
     link: str = ""
     fonte: str = ""
+    # Compatibilidade com o formato antigo (escalas/preco_brl), caso o modelo
+    # responda no schema anterior.
+    escalas: int | None = None
+    preco_brl: float | None = None
 
 
 class GeminiSearchProviderError(RuntimeError):
@@ -196,6 +245,26 @@ class GeminiSearchProvider(BaseProvider):
                 logger.info("Item descartado (schema invalido): %s", exc)
                 continue
 
+            total = flight.preco_total_brl or flight.preco_brl
+            if not total or total <= 0:
+                logger.info("Item descartado (sem preco total): %s", flight.companhia)
+                continue
+
+            connections = [
+                {"airport": c.aeroporto.upper(), "wait_minutes": c.espera_minutos}
+                for c in flight.conexoes
+                if c.aeroporto
+            ]
+            stops = len(connections) if connections else (flight.escalas or 0)
+
+            miles_offer = None
+            if flight.milhas and flight.milhas.quantidade:
+                miles_offer = {
+                    "program": flight.milhas.programa,
+                    "amount": int(flight.milhas.quantidade),
+                    "taxes_brl": float(flight.milhas.taxas_brl or 0),
+                }
+
             results.append(
                 {
                     "provider": self.name,
@@ -205,10 +274,15 @@ class GeminiSearchProvider(BaseProvider):
                     "departure_date": flight.data_ida or kwargs.get("departure_date"),
                     "return_date": flight.data_volta or kwargs.get("return_date"),
                     "airline": flight.companhia,
-                    "price": float(flight.preco_brl),
+                    "price": float(total),
+                    "price_outbound": float(flight.preco_ida_brl) if flight.preco_ida_brl else None,
+                    "price_return": float(flight.preco_volta_brl) if flight.preco_volta_brl else None,
                     "currency": kwargs.get("currency", "BRL"),
-                    "duration_minutes": None,
-                    "stops": flight.escalas,
+                    "duration_minutes": flight.duracao_total_minutos,
+                    "stops": stops,
+                    "connections": connections,
+                    "miles_offer": miles_offer,
+                    "category": flight.categoria or None,
                     "booking_link": flight.link,
                     "raw_payload": {"gemini_web_search": True, "fonte": flight.fonte},
                 }
@@ -259,16 +333,27 @@ def _build_user_prompt(
         )
 
     trecho = f"{origin} -> {destination}, ida em {departure_date}"
+    trip_len = None
     if return_date:
         trecho += f", volta em {return_date}"
+        trip_len = (date.fromisoformat(return_date) - date.fromisoformat(departure_date)).days
+    extra_datas = (
+        f"A viagem tem {trip_len} dias entre ida e volta — qualquer alternativa "
+        f"de datas precisa manter exatamente essa duracao (janela inteira pode "
+        f"deslizar ate 2 dias). "
+        if trip_len
+        else ""
+    )
     return (
         f"Pesquise passagens aereas reais para o trecho {trecho}, "
         f"{adults} passageiro(s), classe {cabin}, com preco em reais (BRL). "
-        "Siga a estrategia de busca obrigatoria do system prompt: tente varias "
-        "fontes e formulacoes de busca antes de responder, e so retorne "
-        "tarifas que voce encontrou de fato, com link real verificavel. "
-        "Devolva ate 10 opcoes reais distintas (companhias e fontes diferentes "
-        "quando possivel), ordenadas do preco mais barato para o mais caro. "
+        f"{extra_datas}"
+        "Siga a estrategia de busca obrigatoria do system prompt: varias "
+        "fontes e formulacoes; precos de ida e volta separados quando a fonte "
+        "mostrar; conexoes com aeroporto e tempo de espera; preco em milhas "
+        "no programa de cada companhia quando existir; link sempre do site "
+        "oficial da companhia aerea. Devolva ate 10 opcoes reais distintas "
+        "cobrindo as categorias mais_barata, mais_rapida e equilibrada. "
         "Retorne apenas o array JSON especificado — nada de texto fora dele."
     )
 
