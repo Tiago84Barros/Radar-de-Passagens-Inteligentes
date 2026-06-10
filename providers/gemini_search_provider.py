@@ -126,9 +126,12 @@ class GeminiSearchProvider(BaseProvider):
             payload = self._call_gemini(prompt)
         except GeminiSearchProviderError:
             raise
-        except Exception as exc:  # noqa: BLE001 - nunca derrubar o pipeline por falha externa
+        except Exception as exc:  # noqa: BLE001
+            # Propaga como erro do provider: o provider_manager captura e
+            # registra a mensagem real no diagnostico (ex.: 429 creditos
+            # esgotados), em vez de exibir um generico "nao retornou cotacoes".
             logger.warning("Falha ao consultar Gemini web search: %s", exc)
-            return []
+            raise GeminiSearchProviderError(str(exc)) from exc
 
         return self.normalize_response(
             payload,
