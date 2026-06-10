@@ -233,9 +233,12 @@ def _render_result_card(option: dict, min_mile_value: float) -> None:
     # ── Conexões com tempo de espera ─────────────────────────────────────────
     connections = option.get("connections") or []
     if connections:
+        from data.destinations_catalog import AIRPORT_NAMES
+
         partes = []
         for c in connections:
-            apt = _html.escape(str(c.get("airport") or "?"))
+            code = str(c.get("airport") or "?").upper()
+            apt = _html.escape(AIRPORT_NAMES.get(code, code))
             espera = format_duration_short(c.get("wait_minutes")) if c.get("wait_minutes") else None
             partes.append(f"{apt} ({espera} de espera)" if espera else apt)
         stops_html = "&#128257; Conexão: " + " &rarr; ".join(partes)

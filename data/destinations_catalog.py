@@ -106,6 +106,23 @@ AIRPORT_NAMES: dict[str, str] = {
     "LIM": "Aeroporto Jorge Chávez",
     "DXB": "Aeroporto Internacional de Dubai",
     "NRT": "Aeroporto de Narita",
+    # Hubs internacionais usados nas rotas combinadas / conexoes
+    "ATL": "Aeroporto Internacional de Atlanta",
+    "PTY": "Aeroporto Internacional de Tocumen (Panamá)",
+    "FRA": "Aeroporto de Frankfurt",
+    "AMS": "Aeroporto de Amsterdã (Schiphol)",
+    "IST": "Aeroporto de Istambul",
+    "DOH": "Aeroporto Internacional de Doha (Hamad)",
+    "DFW": "Aeroporto de Dallas/Fort Worth",
+    "IAH": "Aeroporto de Houston (George Bush)",
+    "ORD": "Aeroporto de Chicago (O'Hare)",
+    "CLT": "Aeroporto de Charlotte (Douglas)",
+    "FLL": "Aeroporto de Fort Lauderdale",
+    "YYZ": "Aeroporto de Toronto (Pearson)",
+    "MEX": "Aeroporto da Cidade do México",
+    "UIO": "Aeroporto de Quito",
+    "MVD": "Aeroporto de Montevidéu (Carrasco)",
+    "ASU": "Aeroporto de Assunção (Silvio Pettirossi)",
 }
 
 
