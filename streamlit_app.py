@@ -487,6 +487,9 @@ def _render_search_tab() -> None:
                 )
         elif diag.get("status") == "real_empty" and _gem_msg.startswith("erro Gemini"):
             st.error(f"🚫 A busca via Gemini falhou: {_gem_msg}")
+        _oai_msg = str(diag.get("openai") or "")
+        if _oai_msg.startswith("erro OpenAI"):
+            st.error(f"🚫 A busca via OpenAI falhou: {_oai_msg}")
         coverage_note = diag.get("coverage_note")
         if coverage_note:
             st.caption(f"🔎 Diagnóstico: {coverage_note}")
@@ -588,8 +591,9 @@ def _render_settings_tab() -> None:
     settings = get_settings()
     diag = database_diagnostics()
     rows = [
-        ("Travelpayouts (fonte de preços)", bool(settings.travelpayouts_api_token)),
-        ("Gemini (apoio/fallback)", bool(settings.gemini_api_key)),
+        ("Gemini (busca web de tarifas)", bool(settings.gemini_api_key)),
+        ("OpenAI / ChatGPT (busca web de tarifas)", bool(settings.openai_api_key)),
+        ("Travelpayouts (fallback de preços)", bool(settings.travelpayouts_api_token)),
         ("Telegram", bool(settings.telegram_bot_token and settings.telegram_chat_id)),
         ("Banco de dados", diag["driver"] != "-"),
         ("GitHub Actions (executar agora)", github_trigger_configured()),

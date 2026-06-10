@@ -55,6 +55,35 @@ def _search_gemini(search_params: dict[str, Any]) -> tuple[list[dict[str, Any]],
         return [], f"erro Gemini: {str(exc)[:120]}"
 
 
+def _search_openai(search_params: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
+    """OpenAI + web search — segundo motor de busca, mesmo contrato do Gemini.
+    Failure-safe: retorna ([], msg) em qualquer erro, nunca derruba o pipeline."""
+    try:
+        from providers.openai_search_provider import OpenAISearchProvider
+        oai = OpenAISearchProvider()
+        if not oai.is_configured():
+            return [], "nao_configurado"
+        flex_days = int(search_params.get("date_flex_days") or 0)
+        flexible_month = bool(search_params.get("flexible_month")) or flex_days >= 14
+        results = oai.search_flights(
+            origin=search_params["origin"],
+            destination=search_params["destination"],
+            departure_date=search_params["departure_date"],
+            return_date=search_params.get("return_date"),
+            currency=search_params.get("currency", "BRL"),
+            adults=int(search_params.get("adults") or search_params.get("passengers") or 1),
+            limit=search_params.get("limit", 20),
+            flexible_month=flexible_month,
+        )
+        for r in results:
+            r.setdefault("source", "openai_web_search")
+            r.setdefault("provider", "openai_web_search")
+        msg = f"{len(results)} cotacao(oes) via OpenAI" if results else "OpenAI nao retornou cotacoes"
+        return results, msg
+    except Exception as exc:  # noqa: BLE001
+        return [], f"erro OpenAI: {str(exc)[:120]}"
+
+
 def _has_real_results(results: list[dict[str, Any]]) -> bool:
     """True se ha ao menos uma cotacao de fonte real (nao demo/mock/fallback)."""
     for r in results:
@@ -102,6 +131,20 @@ def search_all_providers(search_params: dict[str, Any]) -> list[dict[str, Any]]:
             "status": "real_empty",
             "message": gemini_msg_primary,
         }
+
+    # ── OpenAI (segundo motor de busca web, junto do Gemini) ─────────────────
+    openai_results, openai_msg = _search_openai(search_params)
+    results.extend(openai_results)
+    if openai_results:
+        _LAST_PROVIDER_DIAGNOSTIC["openai"] = f"{len(openai_results)} cotacao(oes) via OpenAI."
+        if not gemini_results_primary:
+            _LAST_PROVIDER_DIAGNOSTIC.update(
+                provider="openai_web_search",
+                status="real_ok",
+                message=f"{len(openai_results)} cotacao(oes) via OpenAI (Gemini sem resultado).",
+            )
+    elif openai_msg != "nao_configurado":
+        _LAST_PROVIDER_DIAGNOSTIC["openai"] = openai_msg
 
     # ── Travelpayouts (apoio/fallback) ────────────────────────────────────────
     if provider.is_configured():
@@ -212,7 +255,7 @@ def search_all_providers(search_params: dict[str, Any]) -> list[dict[str, Any]]:
     if not _has_real_results(direct_results):
         _LAST_PROVIDER_DIAGNOSTIC["coverage"] = "sem_cobertura_real"
         _LAST_PROVIDER_DIAGNOSTIC["coverage_note"] = (
-            "Nenhuma fonte real (Travelpayouts/Gemini/conexoes) tem dados para "
+            "Nenhuma fonte real (Gemini/OpenAI/Travelpayouts/conexoes) tem dados para "
             "esta rota/data. Rotas de baixo trafego ou internacionais de nicho "
             "podem nao ter cobertura gratuita disponivel."
         )
