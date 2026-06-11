@@ -313,6 +313,12 @@ def get_last_provider_diagnostic() -> dict[str, Any]:
 def _sort_and_dedupe(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     unique: dict[tuple, dict[str, Any]] = {}
     for item in results:
+        # Itinerario impossivel (volta antes ou no mesmo dia da ida): o cache
+        # da Travelpayouts as vezes pareia datas de registros diferentes.
+        # Nunca exibir datas invertidas — descarta a volta invalida.
+        dep, ret = item.get("departure_date"), item.get("return_date")
+        if dep and ret and str(ret)[:10] <= str(dep)[:10]:
+            item = {**item, "return_date": None, "price_note": item.get("price_note") or "preco_somente_ida"}
         key = (
             item.get("provider"),
             item.get("source"),

@@ -18,6 +18,7 @@ The caller provides a `direct_search_fn(params) -> list[dict]` so the
 same logic works for both live API and demo/fallback modes.
 """
 
+from datetime import date as _date
 from typing import Any, Callable
 
 from services.air_network import find_candidate_hubs, hub_route_label, is_domestic
@@ -68,8 +69,21 @@ def search_via_connections(
     candidate_hubs = find_candidate_hubs(origin, destination, max_hubs)
     combined_results: list[dict[str, Any]] = []
 
+    # Janela de datas aceitavel para as pernas: o dia pedido +/- a tolerancia
+    # que o usuario escolheu. O cache da Travelpayouts (busca por mes) devolve
+    # dias aleatorios do mes — sem este filtro, a rota combinada podia sair
+    # com pernas em datas fora da janela pedida (ou ate antes de hoje).
+    req_dep = _parse_day(search_params.get("departure_date"))
+    flex_days = max(int(search_params.get("date_flex_days") or 0), 0)
+
+    def _within_window(leg: dict[str, Any]) -> bool:
+        d = _parse_day(leg.get("departure_date"))
+        if d is None or req_dep is None:
+            return False
+        return abs((d - req_dep).days) <= flex_days
+
     for hub in candidate_hubs:
-        leg1_results = direct_search_fn(_segment_params(search_params, origin, hub))
+        leg1_results = [l for l in direct_search_fn(_segment_params(search_params, origin, hub)) if _within_window(l)]
         if not leg1_results:
             continue
 
@@ -77,24 +91,50 @@ def search_via_connections(
         if not leg2_results:
             continue
 
-        best_leg1 = min(leg1_results, key=lambda x: float(x.get("price") or 9_999_999))
-        best_leg2 = min(leg2_results, key=lambda x: float(x.get("price") or 9_999_999))
+        # As duas pernas precisam ser viaveis como UMA viagem: a perna 2 parte
+        # no mesmo dia da perna 1 (ou no dia seguinte, conexao noturna).
+        # Sem esse pareamento, o merge juntava a perna 1 mais barata de um dia
+        # com a perna 2 mais barata de outro dia qualquer.
+        best_pair: tuple[dict[str, Any], dict[str, Any]] | None = None
+        best_pair_price = float("inf")
+        for leg1 in leg1_results:
+            d1 = _parse_day(leg1.get("departure_date"))
+            if d1 is None:
+                continue
+            for leg2 in leg2_results:
+                d2 = _parse_day(leg2.get("departure_date"))
+                if d2 is None or not (0 <= (d2 - d1).days <= 1):
+                    continue
+                pair_price = float(leg1.get("price") or 0) + float(leg2.get("price") or 0)
+                if 0 < pair_price < best_pair_price:
+                    best_pair, best_pair_price = (leg1, leg2), pair_price
 
-        combined_price = float(best_leg1.get("price") or 0) + float(best_leg2.get("price") or 0)
-        if combined_price <= 0:
+        if best_pair is None:
             continue
 
         # Skip if more expensive than the cheapest direct result
-        if direct_min is not None and combined_price >= direct_min:
+        if direct_min is not None and best_pair_price >= direct_min:
             continue
 
         combined = _merge_segments(
-            best_leg1, best_leg2, origin, destination, hub,
+            best_pair[0], best_pair[1], origin, destination, hub,
             return_date=search_params.get("return_date"),
         )
         combined_results.append(combined)
 
     return combined_results
+
+
+def _parse_day(value) -> _date | None:
+    """Parse a date/'YYYY-MM-DD...' value into a date (None if unparseable)."""
+    if value is None:
+        return None
+    if isinstance(value, _date):
+        return value
+    try:
+        return _date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
 
 
 def _segment_params(base: dict[str, Any], origin: str, destination: str) -> dict[str, Any]:
@@ -130,19 +170,30 @@ def _merge_segments(
     dur2 = int(leg2.get("duration_minutes") or 0)
     total_duration = (dur1 + LAYOVER_MINUTES + dur2) if (dur1 and dur2) else None
 
-    airline1 = (leg1.get("airline") or "").strip()
-    airline2 = (leg2.get("airline") or "").strip()
+    # Nome completo das companhias (nunca sigla) e nome do aeroporto do hub
+    from data.airlines_catalog import get_airline_name
+    from data.destinations_catalog import AIRPORT_NAMES
+
+    airline1 = get_airline_name((leg1.get("airline") or "").strip())
+    airline2 = get_airline_name((leg2.get("airline") or "").strip())
     if airline1 and airline2 and airline1 != airline2:
         airline_label = f"{airline1} + {airline2}"
     else:
         airline_label = airline1 or airline2 or "–"
+    hub_name = AIRPORT_NAMES.get(hub, hub)
 
     provider = f"combinado:{leg1.get('provider', 'tp')}+{leg2.get('provider', 'tp')}"
 
-    # Normalise return_date to YYYY-MM-DD string (or None)
+    # Normalise return_date to YYYY-MM-DD string (or None). Uma volta anterior
+    # a ida e um itinerario impossivel — nesse caso descartamos a volta em vez
+    # de exibir datas invertidas no card.
     _rd: str | None = None
     if return_date:
         _rd = return_date.isoformat()[:10] if hasattr(return_date, "isoformat") else str(return_date)[:10]
+    dep_day = _parse_day(leg1.get("departure_date"))
+    rd_day = _parse_day(_rd)
+    if dep_day and rd_day and rd_day <= dep_day:
+        _rd = None
 
     return {
         "provider": provider,
@@ -156,11 +207,12 @@ def _merge_segments(
         # Price covers only the outbound journey — flag this for the UI so users
         # understand the return leg is not included in this estimate.
         "price_note": "preco_somente_ida" if _rd else None,
-        "airline": f"{airline_label} (via {hub})",
+        "airline": f"{airline_label} (via {hub_name})",
         "price": price,
         "currency": leg1.get("currency", "BRL"),
         "duration_minutes": total_duration,
         "stops": 1,
+        "connections": [{"airport": hub, "wait_minutes": LAYOVER_MINUTES}],
         "booking_link": leg1.get("booking_link") or "",
         "raw_payload": {
             "combined": True,
