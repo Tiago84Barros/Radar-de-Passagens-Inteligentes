@@ -21,11 +21,12 @@ from providers.base_provider import BaseProvider
 
 logger = logging.getLogger(__name__)
 
-# Modelo principal e, em caso de quota esgotada (429 RESOURCE_EXHAUSTED) no
-# primeiro, modelos alternativos com cota gratuita propria para tentar antes
-# de desistir e cair para o Travelpayouts.
-DEFAULT_MODEL = "gemini-2.0-flash"
-FALLBACK_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash-lite"]
+# Modelo principal e, em caso de quota esgotada (429 RESOURCE_EXHAUSTED) ou
+# modelo descontinuado (404 NOT_FOUND — ex.: gemini-2.0-flash aposentado),
+# modelos alternativos para tentar antes de desistir e cair para o proximo
+# motor (OpenAI/Travelpayouts).
+DEFAULT_MODEL = "gemini-2.5-flash"
+FALLBACK_MODELS = ["gemini-2.5-flash-lite", "gemini-flash-latest"]
 
 SYSTEM_PROMPT = (
     "Voce e um comprador experiente de passagens aereas pesquisando para si "
@@ -223,8 +224,9 @@ class GeminiSearchProvider(BaseProvider):
                 return (getattr(response, "text", None) or "").strip()
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
-                if "RESOURCE_EXHAUSTED" in str(exc) or "429" in str(exc):
-                    logger.info("Modelo %s sem cota; tentando proximo.", model)
+                err = str(exc)
+                if any(m in err for m in ("RESOURCE_EXHAUSTED", "429", "NOT_FOUND", "404")):
+                    logger.info("Modelo %s indisponivel (quota/404); tentando proximo.", model)
                     continue
                 raise
 
