@@ -129,12 +129,16 @@ def _offer_to_option(offer: dict, min_mile_value: float) -> dict:
     return enrich_deal_with_miles(deal, min_mile_value)
 
 
-def _run_manual_search(form: dict) -> list[dict]:
+def _run_manual_search(form: dict) -> dict[str, list[dict]]:
+    """Busca os trechos separadamente: ida e (quando houver) volta, cada um
+    como uma busca one-way própria — a tela mostra as opções de ida em cima e
+    as de volta embaixo, cada bloco com sua ordenação."""
+    min_mile_value = form.get("min_mile_value") or DEFAULT_CENTS_PER_MILE
     params = {
         "origin": form["origin_iata"],
         "destination": form["destination_iata"],
         "departure_date": form["departure_date"],
-        "return_date": form.get("return_date"),
+        "return_date": None,   # cada trecho e buscado como one-way
         "adults": form.get("adults", 1),
         "passengers": form.get("adults", 1),
         "currency": "BRL",
@@ -143,8 +147,23 @@ def _run_manual_search(form: dict) -> list[dict]:
         "max_connection_hubs": form.get("max_connection_hubs", 4),
         "force_web_search": form.get("force_web_search", False),
     }
-    offers = search_all_providers(params)
-    return [_offer_to_option(o, form.get("min_mile_value") or DEFAULT_CENTS_PER_MILE) for o in offers]
+    outbound = search_all_providers(params)
+
+    inbound: list[dict] = []
+    if form.get("return_date"):
+        inbound = search_all_providers(
+            {
+                **params,
+                "origin": form["destination_iata"],
+                "destination": form["origin_iata"],
+                "departure_date": form["return_date"],
+            }
+        )
+
+    return {
+        "outbound": [_offer_to_option(o, min_mile_value) for o in outbound],
+        "return": [_offer_to_option(o, min_mile_value) for o in inbound],
+    }
 
 
 # ── Result cards ──────────────────────────────────────────────────────────────
@@ -218,9 +237,10 @@ def _render_result_card(option: dict, min_mile_value: float) -> None:
     airline = _html.escape(get_airline_name(airline_raw))
     logo_html = _airline_logos_html(airline_raw, size="normal")
     origin = _html.escape(option.get("origin_iata") or "—")
-    dates = _html.escape(
-        f"{format_date_br(option.get('departure_date'))} → {format_date_br(option.get('return_date'))}"
-    )
+    dates = format_date_br(option.get("departure_date"))
+    if option.get("return_date"):
+        dates += f" → {format_date_br(option.get('return_date'))}"
+    dates = _html.escape(dates)
     duration = _html.escape(format_duration_short(option.get("duration_minutes")) or "—")
     price_label = _html.escape(format_brl(price))
     provider = _html.escape(option.get("provider") or "—")
@@ -328,6 +348,32 @@ def _render_result_card(option: dict, min_mile_value: float) -> None:
         f'</div>'
         f'</div>'
     )
+
+
+# Ordenações disponíveis em cada bloco de trecho (ida / volta)
+_LEG_SORT_OPTIONS = {
+    "💰 Menor preço": "menor_preco",
+    "⚡ Menor duração": "menor_duracao",
+}
+
+
+def _render_leg_section(title: str, route: str, day, options: list[dict], *, key: str, form: dict) -> None:
+    """Bloco de um trecho (ida ou volta): título, ordenação própria e cards."""
+    st.markdown(f"### {title}")
+    st.caption(f"{route} · {format_date_br(day)}")
+    if not options:
+        st.info("Nenhuma tarifa encontrada para este trecho. Tente datas mais flexíveis ou remova filtros.")
+        return
+    sort_label = st.radio(
+        "Ordenar por",
+        list(_LEG_SORT_OPTIONS.keys()),
+        horizontal=True,
+        key=f"leg_sort_{key}",
+    )
+    prefs = dict(form, sort_by=_LEG_SORT_OPTIONS[sort_label])
+    ranking = rank_flight_options(options, prefs)
+    for option in ranking["sorted_options"]:
+        _render_result_card(option, form.get("min_mile_value") or DEFAULT_CENTS_PER_MILE)
 
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
@@ -447,7 +493,13 @@ def _render_search_tab() -> None:
                 st.session_state["last_search_error"] = str(exc)
 
     form = st.session_state.get("last_search_form")
-    results: list[dict] = st.session_state.get("last_search_results") or []
+    results_data = st.session_state.get("last_search_results") or {}
+    if isinstance(results_data, list):
+        # Sessão antiga (formato de lista única) — trata tudo como ida.
+        results_data = {"outbound": results_data, "return": []}
+    outbound: list[dict] = results_data.get("outbound") or []
+    inbound: list[dict] = results_data.get("return") or []
+    results = outbound + inbound
     error = st.session_state.get("last_search_error")
 
     if not form:
@@ -512,19 +564,40 @@ def _render_search_tab() -> None:
     if _all_demo:
         st.info("⚠️ Modo demonstração — Travelpayouts não retornou tarifas reais para esta rota/data. Os valores exibidos são estimativas ilustrativas, não preços reais.")
 
-    sort_label = st.selectbox("Ordenar por", list(SORT_OPTIONS.keys()), index=0)
-    prefs = dict(form, sort_by=SORT_OPTIONS[sort_label])
-    ranking = rank_flight_options(results, prefs)
+    if form.get("return_date"):
+        # Ida e volta: trechos buscados separadamente — opções de ida em cima,
+        # opções de volta embaixo, cada bloco com sua própria ordenação.
+        _render_leg_section(
+            "🛫 Voos de ida",
+            f"{form['origin_iata']} → {form['destination_iata']}",
+            form["departure_date"],
+            outbound,
+            key="ida",
+            form=form,
+        )
+        st.markdown("---")
+        _render_leg_section(
+            "🛬 Voos de volta",
+            f"{form['destination_iata']} → {form['origin_iata']}",
+            form["return_date"],
+            inbound,
+            key="volta",
+            form=form,
+        )
+    else:
+        sort_label = st.selectbox("Ordenar por", list(SORT_OPTIONS.keys()), index=0)
+        prefs = dict(form, sort_by=SORT_OPTIONS[sort_label])
+        ranking = rank_flight_options(outbound, prefs)
 
-    cols = st.columns(3)
-    _summary_card(cols[0], "Recomendado", ranking["recommended_option"], "🏆", "recommended")
-    _summary_card(cols[1], "Mais barato", ranking["cheapest_option"], "💰", "cheapest")
-    _summary_card(cols[2], "Mais rápido", ranking["fastest_option"], "⚡", "fastest")
-    st.caption(f"💡 {ranking['reason']}")
+        cols = st.columns(3)
+        _summary_card(cols[0], "Recomendado", ranking["recommended_option"], "🏆", "recommended")
+        _summary_card(cols[1], "Mais barato", ranking["cheapest_option"], "💰", "cheapest")
+        _summary_card(cols[2], "Mais rápido", ranking["fastest_option"], "⚡", "fastest")
+        st.caption(f"💡 {ranking['reason']}")
 
-    st.markdown("---")
-    for option in ranking["sorted_options"]:
-        _render_result_card(option, form.get("min_mile_value") or DEFAULT_CENTS_PER_MILE)
+        st.markdown("---")
+        for option in ranking["sorted_options"]:
+            _render_result_card(option, form.get("min_mile_value") or DEFAULT_CENTS_PER_MILE)
 
     st.markdown("---")
     render_monitor_prompt(form)
