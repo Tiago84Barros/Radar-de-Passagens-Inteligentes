@@ -250,8 +250,17 @@ def _render_result_card(option: dict, min_mile_value: float) -> None:
             else "&#128257; " + _html.escape(format_stops(n_stops) or "—")
         )
 
-    # ── Preço ida / volta separados (quando a fonte informa) ─────────────────
+    # ── Preço ida / volta separados ──────────────────────────────────────────
+    # Quando a fonte informa so um dos trechos, o outro e derivado do total
+    # (total = ida + volta) para a volta sempre aparecer no card.
     p_ida, p_volta = option.get("price_outbound"), option.get("price_return")
+    is_round_trip = bool(option.get("return_date"))
+    price_note = option.get("price_note") or ""
+    if is_round_trip and price_note != "preco_somente_ida":
+        if p_ida and not p_volta and price > p_ida:
+            p_volta = price - p_ida
+        elif p_volta and not p_ida and price > p_volta:
+            p_ida = price - p_volta
     if p_ida and p_volta:
         breakdown_html = (
             f'<div class="result-card-muted">Ida {_html.escape(format_brl(p_ida))} · '
@@ -259,6 +268,8 @@ def _render_result_card(option: dict, min_mile_value: float) -> None:
         )
     elif p_ida:
         breakdown_html = f'<div class="result-card-muted">Ida {_html.escape(format_brl(p_ida))}</div>'
+    elif is_round_trip and price_note != "preco_somente_ida":
+        breakdown_html = '<div class="result-card-muted">Ida + volta incluídas no total</div>'
     else:
         breakdown_html = ""
 
@@ -283,7 +294,6 @@ def _render_result_card(option: dict, min_mile_value: float) -> None:
     else:
         action_html = '<span class="result-card-cta result-card-cta-disabled">Sem link direto</span>'
 
-    price_note = option.get("price_note") or ""
     price_note_html = (
         '<div class="result-card-price-note">⚠️ Preço estimado só para a ida (conexão via hub)</div>'
         if price_note == "preco_somente_ida"

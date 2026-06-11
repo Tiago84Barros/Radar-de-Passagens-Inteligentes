@@ -63,10 +63,12 @@ SYSTEM_PROMPT = (
     "Brasil sem voo direto barato, pesquise itinerarios via grandes hubs "
     "(Lisboa, Madri, Miami, Nova York, Atlanta, Panama, Bogota, Lima, "
     "Santiago, Dubai, Istambul, Doha — conforme a regiao do destino).\n"
-    "6. PRECOS IDA/VOLTA: em viagens de ida e volta, sempre que a fonte "
-    "mostrar os trechos separados, preencha 'preco_ida_brl' e "
-    "'preco_volta_brl' alem do total. Se a fonte so mostra o total, deixe os "
-    "trechos como null — nunca divida o total por 2.\n"
+    "6. PRECOS IDA/VOLTA: em viagens de ida e volta, preencher 'preco_ida_brl' "
+    "E 'preco_volta_brl' e OBRIGATORIO sempre que o detalhamento existir na "
+    "fonte — Google Flights e os sites das companhias mostram o valor de cada "
+    "trecho no detalhamento da tarifa; consulte-o antes de desistir. So deixe "
+    "null se nenhuma fonte consultada mostrar os trechos separados — e nunca "
+    "divida o total por 2 nem repita o total em um dos trechos.\n"
     "7. MILHAS: pesquise tambem o preco em milhas nos programas das "
     "companhias encontradas (Smiles para GOL, Latam Pass para LATAM, TudoAzul "
     "para Azul, AAdvantage para American etc.). Se achar, preencha 'milhas' "
@@ -267,6 +269,18 @@ class GeminiSearchProvider(BaseProvider):
                     "taxes_brl": float(flight.milhas.taxas_brl or 0),
                 }
 
+            # Ida/volta: quando a fonte so informa um dos trechos, o outro e
+            # derivado do total (total = ida + volta) para o card sempre
+            # exibir os dois precos em viagens de ida e volta.
+            price_outbound = float(flight.preco_ida_brl) if flight.preco_ida_brl else None
+            price_return = float(flight.preco_volta_brl) if flight.preco_volta_brl else None
+            is_round_trip = bool(flight.data_volta or kwargs.get("return_date"))
+            if is_round_trip:
+                if price_outbound and not price_return and float(total) > price_outbound:
+                    price_return = round(float(total) - price_outbound, 2)
+                elif price_return and not price_outbound and float(total) > price_return:
+                    price_outbound = round(float(total) - price_return, 2)
+
             results.append(
                 {
                     "provider": self.name,
@@ -277,8 +291,8 @@ class GeminiSearchProvider(BaseProvider):
                     "return_date": flight.data_volta or kwargs.get("return_date"),
                     "airline": flight.companhia,
                     "price": float(total),
-                    "price_outbound": float(flight.preco_ida_brl) if flight.preco_ida_brl else None,
-                    "price_return": float(flight.preco_volta_brl) if flight.preco_volta_brl else None,
+                    "price_outbound": price_outbound,
+                    "price_return": price_return,
                     "currency": kwargs.get("currency", "BRL"),
                     "duration_minutes": flight.duracao_total_minutos,
                     "stops": stops,

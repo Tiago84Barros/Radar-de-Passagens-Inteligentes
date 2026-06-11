@@ -17,12 +17,17 @@ SYSTEM_INSTRUCTION = (
 
 
 def _build_prompt(best: dict[str, Any], old_price: float, drop_pct: float) -> str:
+    p_ida, p_volta = best.get("price_outbound"), best.get("price_return")
+    breakdown = ""
+    if p_ida and p_volta:
+        breakdown = f"Trechos: ida R$ {float(p_ida):.2f} e volta R$ {float(p_volta):.2f}\n"
     return (
         f"Trecho: {best.get('origin', '')} -> {best.get('destination', '')}\n"
         f"Companhia: {best.get('airline', '')}\n"
         f"Escalas: {best.get('stops', '')}\n"
         f"Preco anterior: R$ {old_price:.2f}\n"
         f"Preco novo: R$ {best.get('price'):.2f}\n"
+        f"{breakdown}"
         f"Queda: {drop_pct:.1f}%\n"
         "Escreva o alerta para o viajante avisando dessa queda de preco."
     )
