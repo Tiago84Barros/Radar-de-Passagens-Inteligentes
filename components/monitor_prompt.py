@@ -73,31 +73,44 @@ def render_monitor_prompt(config: dict) -> None:
     st.markdown("**Deseja rastrear esta busca 24h?**")
     c1, c2 = st.columns(2)
     if c1.button("Sim, rastrear 24h", key="monitor_yes", type="primary", use_container_width=True):
+        # st.rerun() lança uma exceção interna do Streamlit — chamado dentro do
+        # `with session_scope()`, derruba a transação em rollback e a busca
+        # nunca era gravada. Por isso a decisão acontece dentro da transação,
+        # mas o rerun só dispara depois do commit.
+        outcome: dict | None = None
         with session_scope() as db:
             existing = find_existing_monitor(db, o, d)
             if existing and existing.departure_date == config.get("departure_date"):
-                st.session_state["monitor_feedback"] = {
-                    "level": "info",
-                    "text": f"Você já está rastreando {o} → {d} nesta data.",
+                outcome = {
+                    "feedback": {
+                        "level": "info",
+                        "text": f"Você já está rastreando {o} → {d} nesta data.",
+                    }
                 }
-                st.rerun()
             elif existing:
-                st.session_state["monitor_conflict"] = {
-                    "existing": {
-                        "origin_iata": existing.origin_iata,
-                        "destination_iata": existing.destination_iata,
-                        "departure_date": existing.departure_date,
-                    },
-                    "route_key": _route_key(config),
+                outcome = {
+                    "conflict": {
+                        "existing": {
+                            "origin_iata": existing.origin_iata,
+                            "destination_iata": existing.destination_iata,
+                            "departure_date": existing.departure_date,
+                        },
+                        "route_key": _route_key(config),
+                    }
                 }
-                st.rerun()
             else:
                 create_monitored_search(db, config)
-                st.session_state["monitor_feedback"] = {
-                    "level": "success",
-                    "text": f"✅ Rastreamento de 24h ativado para {o} → {d}.",
+                outcome = {
+                    "feedback": {
+                        "level": "success",
+                        "text": f"✅ Rastreamento de 24h ativado para {o} → {d}.",
+                    }
                 }
-                st.rerun()
+        if outcome and outcome.get("feedback"):
+            st.session_state["monitor_feedback"] = outcome["feedback"]
+        if outcome and outcome.get("conflict"):
+            st.session_state["monitor_conflict"] = outcome["conflict"]
+        st.rerun()
     if c2.button("Não", key="monitor_no", use_container_width=True):
         st.session_state["monitor_feedback"] = {"level": "info", "text": "Tudo bem — busca não será rastreada."}
         st.rerun()
