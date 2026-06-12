@@ -152,6 +152,8 @@ def _run_manual_search(form: dict) -> dict[str, list[dict]]:
 
     inbound: list[dict] = []
     diag_inbound: dict = {}
+    packages: list[dict] = []
+    diag_packages: dict = {}
     if form.get("return_date"):
         inbound = search_all_providers(
             {
@@ -163,10 +165,16 @@ def _run_manual_search(form: dict) -> dict[str, list[dict]]:
         )
         diag_inbound = get_last_provider_diagnostic()
 
+        # Pacotes ida+volta: e o formato que as fontes mais publicam — uma
+        # terceira consulta com as duas datas traz esses combos completos.
+        packages = search_all_providers({**params, "return_date": form["return_date"]})
+        diag_packages = get_last_provider_diagnostic()
+
     return {
         "outbound": [_offer_to_option(o, min_mile_value) for o in outbound],
         "return": [_offer_to_option(o, min_mile_value) for o in inbound],
-        "diagnostics": {"ida": diag_outbound, "volta": diag_inbound},
+        "packages": [_offer_to_option(o, min_mile_value) for o in packages],
+        "diagnostics": {"ida": diag_outbound, "volta": diag_inbound, "pacotes": diag_packages},
     }
 
 
@@ -285,6 +293,10 @@ def _render_result_card(option: dict, min_mile_value: float) -> None:
             p_volta = price - p_ida
         elif p_volta and not p_ida and price > p_volta:
             p_ida = price - p_volta
+    rt_total = is_round_trip and price_note != "preco_somente_ida"
+    rt_note_html = (
+        '<div class="result-card-muted">💼 Valor total da viagem: ida + volta</div>' if rt_total else ""
+    )
     if p_ida and p_volta:
         breakdown_html = (
             f'<div class="result-card-muted">Ida {_html.escape(format_brl(p_ida))} · '
@@ -292,23 +304,26 @@ def _render_result_card(option: dict, min_mile_value: float) -> None:
         )
     elif p_ida:
         breakdown_html = f'<div class="result-card-muted">Ida {_html.escape(format_brl(p_ida))}</div>'
-    elif is_round_trip and price_note != "preco_somente_ida":
-        breakdown_html = '<div class="result-card-muted">Ida + volta incluídas no total</div>'
     else:
         breakdown_html = ""
+    breakdown_html = rt_note_html + breakdown_html
 
     # ── Milhas: preço real do programa quando o Gemini achou; senão estimativa ─
+    rt_miles_note = ", ida + volta" if rt_total else ""
     miles_offer = option.get("miles_offer")
     if miles_offer and miles_offer.get("amount"):
         taxas = float(miles_offer.get("taxes_brl") or 0)
         taxas_txt = f" + {format_brl(taxas)} de taxas" if taxas else ""
+        rt_suffix = " — ida + volta" if rt_total else ""
         miles_label = _html.escape(
-            f"{format_miles(miles_offer['amount'])} no {miles_offer.get('program') or 'programa da companhia'}{taxas_txt}"
+            f"{format_miles(miles_offer['amount'])} no {miles_offer.get('program') or 'programa da companhia'}{taxas_txt}{rt_suffix}"
         )
     else:
         miles = option.get("estimated_miles") or estimate_miles_from_cash_price(price, min_mile_value)
         cmp = compare_cash_vs_miles(price, miles, option.get("taxes") or 0.0, min_mile_value)
-        miles_label = _html.escape(f"≈ {format_miles(miles)} (estimativa) · {cmp['recommendation']}")
+        miles_label = _html.escape(
+            f"≈ {format_miles(miles)} (estimativa{rt_miles_note}) · {cmp['recommendation']}"
+        )
 
     if link:
         action_html = (
@@ -362,11 +377,11 @@ _LEG_SORT_OPTIONS = {
 
 
 def _render_leg_section(
-    title: str, route: str, day, options: list[dict], *, key: str, form: dict, diag: dict | None = None
+    title: str, subtitle: str, options: list[dict], *, key: str, form: dict, diag: dict | None = None
 ) -> None:
-    """Bloco de um trecho (ida ou volta): título, ordenação própria e cards."""
+    """Bloco de resultados (ida, volta ou pacote): título, ordenação própria e cards."""
     st.markdown(f"### {title}")
-    st.caption(f"{route} · {format_date_br(day)}")
+    st.caption(subtitle)
 
     # Poucos resultados: mostra o que cada fonte respondeu para este trecho,
     # para diagnóstico ficar visível sem precisar abrir logs.
@@ -520,7 +535,7 @@ def _render_search_tab() -> None:
         results_data = {"outbound": results_data, "return": []}
     outbound: list[dict] = results_data.get("outbound") or []
     inbound: list[dict] = results_data.get("return") or []
-    results = outbound + inbound
+    results = outbound + inbound + (results_data.get("packages") or [])
     error = st.session_state.get("last_search_error")
 
     if not form:
@@ -591,8 +606,7 @@ def _render_search_tab() -> None:
         diagnostics = results_data.get("diagnostics") or {}
         _render_leg_section(
             "🛫 Voos de ida",
-            f"{form['origin_iata']} → {form['destination_iata']}",
-            form["departure_date"],
+            f"{form['origin_iata']} → {form['destination_iata']} · {format_date_br(form['departure_date'])}",
             outbound,
             key="ida",
             form=form,
@@ -601,12 +615,22 @@ def _render_search_tab() -> None:
         st.markdown("---")
         _render_leg_section(
             "🛬 Voos de volta",
-            f"{form['destination_iata']} → {form['origin_iata']}",
-            form["return_date"],
+            f"{form['destination_iata']} → {form['origin_iata']} · {format_date_br(form['return_date'])}",
             inbound,
             key="volta",
             form=form,
             diag=diagnostics.get("volta"),
+        )
+        st.markdown("---")
+        _render_leg_section(
+            "📦 Pacotes ida e volta",
+            f"{form['origin_iata']} → {form['destination_iata']} → {form['origin_iata']} · "
+            f"{format_date_br(form['departure_date'])} → {format_date_br(form['return_date'])} · "
+            "Preço e milhas valem pela viagem completa (ida + volta).",
+            results_data.get("packages") or [],
+            key="pacotes",
+            form=form,
+            diag=diagnostics.get("pacotes"),
         )
     else:
         sort_label = st.selectbox("Ordenar por", list(SORT_OPTIONS.keys()), index=0)
