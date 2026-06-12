@@ -104,8 +104,23 @@ def render_monitor_prompt(config: dict) -> None:
                     "feedback": {
                         "level": "success",
                         "text": f"✅ Rastreamento de 24h ativado para {o} → {d}.",
-                    }
+                    },
+                    "created": True,
                 }
+        # TESTE TEMPORÁRIO: dispara uma mensagem de teste no Telegram (via
+        # GitHub Actions, onde estão os secrets) para validar o canal de
+        # alertas. Remover junto com telegram-test.yml depois que o teste
+        # passar.
+        if outcome and outcome.get("created"):
+            from services.github_actions_service import trigger_telegram_test
+
+            test = trigger_telegram_test()
+            extra = (
+                " 📨 Mensagem de teste enviada ao seu Telegram — deve chegar em até 1 minuto."
+                if test.ok
+                else f" ⚠️ Não consegui disparar o teste do Telegram: {test.message}"
+            )
+            outcome["feedback"]["text"] += extra
         if outcome and outcome.get("feedback"):
             st.session_state["monitor_feedback"] = outcome["feedback"]
         if outcome and outcome.get("conflict"):

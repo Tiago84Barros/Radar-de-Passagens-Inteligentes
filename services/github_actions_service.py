@@ -42,22 +42,34 @@ def trigger_monitor(force: bool = True) -> DispatchResult:
     which case the scheduled cron will pick it up later.
     """
     s = get_settings()
+    return _dispatch_workflow(s.github_workflow, {"force": "true" if force else "false"})
+
+
+def trigger_telegram_test() -> DispatchResult:
+    """TESTE TEMPORÁRIO: dispara o workflow telegram-test.yml, que envia uma
+    mensagem fixa no Telegram para validar os secrets do repositório.
+    Remover junto com o workflow depois que o teste passar."""
+    return _dispatch_workflow("telegram-test.yml", None)
+
+
+def _dispatch_workflow(workflow_file: str, inputs: dict | None) -> DispatchResult:
+    """Fire any workflow of the repo via workflow_dispatch. Never raises."""
+    s = get_settings()
     if not s.github_token or not s.github_repo:
         return DispatchResult(
             ok=False,
             message="GITHUB_TOKEN/GITHUB_REPO não configurados — o monitor agendado coletará em até 30 min.",
         )
 
-    url = f"{_API_BASE}/repos/{s.github_repo}/actions/workflows/{s.github_workflow}/dispatches"
+    url = f"{_API_BASE}/repos/{s.github_repo}/actions/workflows/{workflow_file}/dispatches"
     headers = {
         "Accept": "application/vnd.github+json",
         "Authorization": f"Bearer {s.github_token}",
         "X-GitHub-Api-Version": "2022-11-28",
     }
-    payload = {
-        "ref": s.github_ref,
-        "inputs": {"force": "true" if force else "false"},
-    }
+    payload: dict = {"ref": s.github_ref}
+    if inputs:
+        payload["inputs"] = inputs
 
     try:
         resp = requests.post(url, json=payload, headers=headers, timeout=_TIMEOUT)
@@ -81,11 +93,11 @@ def trigger_monitor(force: bool = True) -> DispatchResult:
     elif resp.status_code == 404:
         msg = (
             "Workflow ou repositório não encontrado (404). Confira GITHUB_REPO "
-            f"('{s.github_repo}') e GITHUB_WORKFLOW ('{s.github_workflow}')."
+            f"('{s.github_repo}') e o arquivo '{workflow_file}'."
         )
     elif resp.status_code == 422:
         msg = (
-            "GitHub recusou o disparo (422). Confirme que monitor.yml tem 'workflow_dispatch' "
+            f"GitHub recusou o disparo (422). Confirme que {workflow_file} tem 'workflow_dispatch' "
             f"e que o branch '{s.github_ref}' existe."
         )
     else:
