@@ -45,13 +45,6 @@ def trigger_monitor(force: bool = True) -> DispatchResult:
     return _dispatch_workflow(s.github_workflow, {"force": "true" if force else "false"})
 
 
-def trigger_telegram_test() -> DispatchResult:
-    """TESTE TEMPORÁRIO: dispara o workflow telegram-test.yml, que envia uma
-    mensagem fixa no Telegram para validar os secrets do repositório.
-    Remover junto com o workflow depois que o teste passar."""
-    return _dispatch_workflow("telegram-test.yml", None)
-
-
 def _dispatch_workflow(workflow_file: str, inputs: dict | None) -> DispatchResult:
     """Fire any workflow of the repo via workflow_dispatch. Never raises."""
     s = get_settings()
