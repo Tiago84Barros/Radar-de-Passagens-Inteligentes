@@ -148,8 +148,10 @@ def _run_manual_search(form: dict) -> dict[str, list[dict]]:
         "force_web_search": form.get("force_web_search", False),
     }
     outbound = search_all_providers(params)
+    diag_outbound = get_last_provider_diagnostic()
 
     inbound: list[dict] = []
+    diag_inbound: dict = {}
     if form.get("return_date"):
         inbound = search_all_providers(
             {
@@ -159,10 +161,12 @@ def _run_manual_search(form: dict) -> dict[str, list[dict]]:
                 "departure_date": form["return_date"],
             }
         )
+        diag_inbound = get_last_provider_diagnostic()
 
     return {
         "outbound": [_offer_to_option(o, min_mile_value) for o in outbound],
         "return": [_offer_to_option(o, min_mile_value) for o in inbound],
+        "diagnostics": {"ida": diag_outbound, "volta": diag_inbound},
     }
 
 
@@ -357,10 +361,27 @@ _LEG_SORT_OPTIONS = {
 }
 
 
-def _render_leg_section(title: str, route: str, day, options: list[dict], *, key: str, form: dict) -> None:
+def _render_leg_section(
+    title: str, route: str, day, options: list[dict], *, key: str, form: dict, diag: dict | None = None
+) -> None:
     """Bloco de um trecho (ida ou volta): título, ordenação própria e cards."""
     st.markdown(f"### {title}")
     st.caption(f"{route} · {format_date_br(day)}")
+
+    # Poucos resultados: mostra o que cada fonte respondeu para este trecho,
+    # para diagnóstico ficar visível sem precisar abrir logs.
+    if diag and len(options) <= 2:
+        bits = [str(diag.get("message") or "")]
+        if diag.get("openai"):
+            bits.append(f"OpenAI: {diag['openai']}")
+        if diag.get("travelpayouts_apoio"):
+            bits.append(f"Travelpayouts: {diag['travelpayouts_apoio']}")
+        if diag.get("travelpayouts_erro"):
+            bits.append(f"Travelpayouts: {diag['travelpayouts_erro']}")
+        joined = " · ".join(b for b in bits if b)
+        if joined:
+            st.caption(f"🔎 Fontes deste trecho: {joined}")
+
     if not options:
         st.info("Nenhuma tarifa encontrada para este trecho. Tente datas mais flexíveis ou remova filtros.")
         return
@@ -567,6 +588,7 @@ def _render_search_tab() -> None:
     if form.get("return_date"):
         # Ida e volta: trechos buscados separadamente — opções de ida em cima,
         # opções de volta embaixo, cada bloco com sua própria ordenação.
+        diagnostics = results_data.get("diagnostics") or {}
         _render_leg_section(
             "🛫 Voos de ida",
             f"{form['origin_iata']} → {form['destination_iata']}",
@@ -574,6 +596,7 @@ def _render_search_tab() -> None:
             outbound,
             key="ida",
             form=form,
+            diag=diagnostics.get("ida"),
         )
         st.markdown("---")
         _render_leg_section(
@@ -583,6 +606,7 @@ def _render_search_tab() -> None:
             inbound,
             key="volta",
             form=form,
+            diag=diagnostics.get("volta"),
         )
     else:
         sort_label = st.selectbox("Ordenar por", list(SORT_OPTIONS.keys()), index=0)

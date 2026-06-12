@@ -255,14 +255,24 @@ class GeminiSearchProvider(BaseProvider):
                 logger.info("Item descartado (sem preco total): %s", flight.companhia)
                 continue
 
-            # Busca somente ida: item que volta com data_volta e suspeito de
-            # ser pacote ida+volta (preco total do pacote, nao do trecho) —
-            # descarta para nunca exibir duas datas num card de trecho unico.
-            if not kwargs.get("return_date") and flight.data_volta:
-                logger.info(
-                    "Item descartado (data_volta em busca somente ida): %s", flight.companhia
-                )
-                continue
+            # Busca somente ida: item com data_volta e um pacote ida+volta.
+            # Quando a fonte detalha o preco da ida, aproveitamos so esse
+            # trecho (as paginas de busca mostram majoritariamente pacotes —
+            # descartar tudo deixava a secao de ida quase vazia). Sem o
+            # detalhamento, descarta: o total seria do pacote, nao do trecho.
+            data_volta = flight.data_volta
+            preco_volta = flight.preco_volta_brl
+            if not kwargs.get("return_date") and data_volta:
+                if flight.preco_ida_brl and 0 < float(flight.preco_ida_brl) < float(total):
+                    total = float(flight.preco_ida_brl)
+                    data_volta = None
+                    preco_volta = None
+                else:
+                    logger.info(
+                        "Item descartado (pacote ida+volta sem detalhamento em busca somente ida): %s",
+                        flight.companhia,
+                    )
+                    continue
 
             connections = [
                 {"airport": c.aeroporto.upper(), "wait_minutes": c.espera_minutos}
@@ -283,8 +293,8 @@ class GeminiSearchProvider(BaseProvider):
             # derivado do total (total = ida + volta) para o card sempre
             # exibir os dois precos em viagens de ida e volta.
             price_outbound = float(flight.preco_ida_brl) if flight.preco_ida_brl else None
-            price_return = float(flight.preco_volta_brl) if flight.preco_volta_brl else None
-            is_round_trip = bool(flight.data_volta or kwargs.get("return_date"))
+            price_return = float(preco_volta) if preco_volta else None
+            is_round_trip = bool(data_volta or kwargs.get("return_date"))
             if is_round_trip:
                 if price_outbound and not price_return and float(total) > price_outbound:
                     price_return = round(float(total) - price_outbound, 2)
@@ -298,7 +308,7 @@ class GeminiSearchProvider(BaseProvider):
                     "origin": flight.origem.upper() or kwargs.get("origin"),
                     "destination": flight.destino.upper() or kwargs.get("destination"),
                     "departure_date": flight.data_ida or kwargs.get("departure_date"),
-                    "return_date": flight.data_volta or kwargs.get("return_date"),
+                    "return_date": data_volta or kwargs.get("return_date"),
                     "airline": flight.companhia,
                     "price": float(total),
                     "price_outbound": price_outbound,
@@ -346,7 +356,9 @@ def _build_user_prompt(
         "ATENCAO: esta busca e de passagem SOMENTE IDA (one-way). "
         "Pesquise e reporte apenas tarifas one-way deste trecho: "
         "'preco_total_brl' deve ser o preco SO deste trecho (nunca de pacote "
-        "ida e volta) e 'data_volta' deve ser sempre null. "
+        "ida e volta) e 'data_volta' deve ser sempre null. Se a fonte so "
+        "mostrar pacotes de ida e volta, abra o detalhamento da tarifa e "
+        "reporte em 'preco_total_brl' o valor apenas deste trecho. "
         if not return_date
         else ""
     )

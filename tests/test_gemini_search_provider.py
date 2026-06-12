@@ -103,6 +103,33 @@ def test_one_way_search_discards_round_trip_items(provider, monkeypatch):
     assert results[0]["return_date"] is None
 
 
+def test_one_way_search_salvages_outbound_price_from_round_trip_breakdown(provider, monkeypatch):
+    """Busca somente ida: pacote ida+volta COM detalhamento de preco da ida e
+    aproveitado como tarifa one-way (preco so do trecho, sem data de volta)."""
+    payload = json.dumps(
+        [
+            {
+                "companhia": "LATAM",
+                "origem": "GRU",
+                "destino": "LIS",
+                "data_ida": "2026-09-10",
+                "data_volta": "2026-09-20",
+                "preco_total_brl": 4000.00,
+                "preco_ida_brl": 1900.00,
+                "preco_volta_brl": 2100.00,
+            },
+        ]
+    )
+    monkeypatch.setattr(provider, "_call_gemini", lambda prompt: payload)
+
+    results = provider.search_flights("GRU", "LIS", "2026-09-10")
+
+    assert len(results) == 1
+    assert results[0]["price"] == 1900.00
+    assert results[0]["return_date"] is None
+    assert results[0]["price_return"] is None
+
+
 def test_search_flights_returns_empty_list_on_invalid_json(provider, monkeypatch):
     monkeypatch.setattr(provider, "_call_gemini", lambda prompt: "isso nao e json")
 
