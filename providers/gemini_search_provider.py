@@ -255,6 +255,15 @@ class GeminiSearchProvider(BaseProvider):
                 logger.info("Item descartado (sem preco total): %s", flight.companhia)
                 continue
 
+            # Busca somente ida: item que volta com data_volta e suspeito de
+            # ser pacote ida+volta (preco total do pacote, nao do trecho) —
+            # descarta para nunca exibir duas datas num card de trecho unico.
+            if not kwargs.get("return_date") and flight.data_volta:
+                logger.info(
+                    "Item descartado (data_volta em busca somente ida): %s", flight.companhia
+                )
+                continue
+
             connections = [
                 {"airport": c.aeroporto.upper(), "wait_minutes": c.espera_minutos}
                 for c in flight.conexoes
@@ -330,6 +339,18 @@ def _build_user_prompt(
     cabin: str,
     flexible_month: bool = False,
 ) -> str:
+    # Busca SOMENTE IDA (one-way): cada trecho da viagem e pesquisado em
+    # separado — o preco precisa ser apenas do trecho, nunca de pacote
+    # ida+volta, e data_volta deve vir sempre null.
+    one_way_note = (
+        "ATENCAO: esta busca e de passagem SOMENTE IDA (one-way). "
+        "Pesquise e reporte apenas tarifas one-way deste trecho: "
+        "'preco_total_brl' deve ser o preco SO deste trecho (nunca de pacote "
+        "ida e volta) e 'data_volta' deve ser sempre null. "
+        if not return_date
+        else ""
+    )
+
     if flexible_month:
         month_label = _month_label(departure_date)
         duration_days = None
@@ -338,12 +359,18 @@ def _build_user_prompt(
         trecho = f"{origin} -> {destination}, com ida em qualquer dia de {month_label}"
         if duration_days:
             trecho += f" e permanencia de aproximadamente {duration_days} dias"
+        datas_note = (
+            "cada uma com sua data_ida e data_volta exatas (as datas reais da "
+            "oferta, nao apenas o mes). "
+            if return_date
+            else "cada uma com sua data_ida exata (a data real da oferta, nao apenas o mes). "
+        )
         return (
             f"Pesquise passagens aereas reais e variadas para o trecho {trecho}, "
             f"{adults} passageiro(s), classe {cabin}, com preco em reais (BRL). "
+            f"{one_way_note}"
             "Nao se limite a um unico dia: varie a data de ida ao longo do mes inteiro "
-            "e retorne as opcoes mais baratas encontradas, cada uma com sua data_ida e "
-            "data_volta exatas (as datas reais da oferta, nao apenas o mes). "
+            f"e retorne as opcoes mais baratas encontradas, {datas_note}"
             "Siga a estrategia de busca obrigatoria do system prompt: tente varias "
             "fontes e formulacoes. Devolva ate 10 opcoes reais distintas. "
             "Retorne apenas o array JSON especificado — nada de texto fora dele."
@@ -361,16 +388,22 @@ def _build_user_prompt(
         if trip_len
         else ""
     )
+    precos_note = (
+        "precos de ida e volta separados quando a fonte mostrar; "
+        if return_date
+        else ""
+    )
     return (
         f"Pesquise passagens aereas reais para o trecho {trecho}, "
         f"{adults} passageiro(s), classe {cabin}, com preco em reais (BRL). "
+        f"{one_way_note}"
         f"{extra_datas}"
         "Siga a estrategia de busca obrigatoria do system prompt: varias "
-        "fontes e formulacoes; precos de ida e volta separados quando a fonte "
-        "mostrar; conexoes com aeroporto e tempo de espera; preco em milhas "
-        "no programa de cada companhia quando existir; link sempre do site "
-        "oficial da companhia aerea. Devolva ate 10 opcoes reais distintas "
-        "cobrindo as categorias mais_barata, mais_rapida e equilibrada. "
+        f"fontes e formulacoes; {precos_note}conexoes com aeroporto e tempo "
+        "de espera; preco em milhas no programa de cada companhia quando "
+        "existir; link sempre do site oficial da companhia aerea. Devolva "
+        "ate 10 opcoes reais distintas cobrindo as categorias mais_barata, "
+        "mais_rapida e equilibrada. "
         "Retorne apenas o array JSON especificado — nada de texto fora dele."
     )
 

@@ -66,9 +66,41 @@ def test_search_flights_handles_markdown_fenced_json(provider, monkeypatch):
     fenced = "```json\n" + VALID_JSON + "\n```"
     monkeypatch.setattr(provider, "_call_gemini", lambda prompt: fenced)
 
-    results = provider.search_flights("GRU", "LIS", "2026-09-10")
+    results = provider.search_flights("GRU", "LIS", "2026-09-10", "2026-09-20")
 
     assert len(results) == 2
+
+
+def test_one_way_search_discards_round_trip_items(provider, monkeypatch):
+    """Busca somente ida: itens com data_volta sao pacotes ida+volta (preco do
+    pacote, nao do trecho) e devem ser descartados."""
+    payload = json.dumps(
+        [
+            {
+                "companhia": "LATAM",
+                "origem": "GRU",
+                "destino": "LIS",
+                "data_ida": "2026-09-10",
+                "data_volta": "2026-09-20",
+                "preco_brl": 3200.50,
+            },
+            {
+                "companhia": "TAP",
+                "origem": "GRU",
+                "destino": "LIS",
+                "data_ida": "2026-09-10",
+                "data_volta": None,
+                "preco_brl": 1800.00,
+            },
+        ]
+    )
+    monkeypatch.setattr(provider, "_call_gemini", lambda prompt: payload)
+
+    results = provider.search_flights("GRU", "LIS", "2026-09-10")
+
+    assert len(results) == 1
+    assert results[0]["airline"] == "TAP"
+    assert results[0]["return_date"] is None
 
 
 def test_search_flights_returns_empty_list_on_invalid_json(provider, monkeypatch):
