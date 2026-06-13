@@ -56,10 +56,6 @@ class MonitoredSearch(Base):
     # Estado da passagem rastreada entre verificações ("available"/"unavailable").
     # Permite avisar "não está mais disponível" uma única vez quando ela some.
     last_availability_state: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
-    # Preço de uma tarifa candidata vista na verificação anterior, aguardando
-    # confirmação. Só alertamos quando a mesma boa tarifa reaparece na busca
-    # seguinte — corta alucinação/preço fantasma das fontes de busca web.
-    pending_alert_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
 
 _ENGINE: Engine | None = None
@@ -168,7 +164,6 @@ def ensure_schema() -> None:
     existing = {c["name"] for c in insp.get_columns("monitored_searches")}
     additive_columns = {
         "last_availability_state": "ALTER TABLE monitored_searches ADD COLUMN last_availability_state VARCHAR(20)",
-        "pending_alert_price": "ALTER TABLE monitored_searches ADD COLUMN pending_alert_price FLOAT",
     }
     for column, ddl in additive_columns.items():
         if column not in existing:

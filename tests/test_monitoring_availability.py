@@ -1,12 +1,13 @@
-"""Confirmação anti-alucinação + disponibilidade da passagem rastreada.
+"""Confiabilidade da tarifa (corroboração sem atraso) + disponibilidade.
 
 Duas garantias verificadas aqui:
 
-1. Confirmação: uma tarifa nova só vira alerta quando reaparece numa SEGUNDA
-   verificação seguida — corta o "preço fantasma" que some quando você vai
-   olhar de manhã.
+1. Confiabilidade: o alerta sai NA HORA (não perde tarifa que some rápido), mas
+   leva um selo — "confirmada" quando vem de preço real ou é corroborada por
+   outra fonte na mesma busca; "a confirmar" quando é uma tarifa solitária de
+   busca web (risco de preço fantasma).
 2. Disponibilidade: depois de avisada, a cada verificação o bot reconfere a
-   passagem e diz se ela "ainda está disponível" ou "não está mais disponível".
+   passagem e diz se "ainda está disponível" ou "não está mais disponível".
 """
 from datetime import date
 
@@ -30,10 +31,10 @@ def captured(monkeypatch):
     return messages
 
 
-def _offer(price: float, *, airline="G3"):
+def _offer(price: float, *, airline="G3", provider="openai_web_search"):
     return {
-        "provider": "openai_web_search",
-        "source": "openai_web_search",
+        "provider": provider,
+        "source": provider,
         "origin": "BEL",
         "destination": "FOR",
         "departure_date": "2026-07-01",
@@ -66,46 +67,49 @@ def _run(monkeypatch, search, offers):
     return monitoring_bot.execute_monitored_search(None, search)
 
 
-def _establish_alert(monkeypatch, search, price=300.0):
-    """Roda duas verificações com a mesma tarifa para confirmar e disparar o
-    primeiro alerta (estado inicial de 'rastreando uma passagem')."""
-    _run(monkeypatch, search, [_offer(price)])  # 1ª aparição → arma candidata
-    return _run(monkeypatch, search, [_offer(price)])  # 2ª → confirma e alerta
+# ── Confiabilidade (corroboração na mesma busca, sem atraso) ───────────────────
 
-
-# ── Confirmação ───────────────────────────────────────────────────────────────
-
-def test_first_sighting_does_not_alert(monkeypatch, captured):
+def test_lone_web_fare_alerts_immediately_marked_unconfirmed(monkeypatch, captured):
     search = _search()
-    res = _run(monkeypatch, search, [_offer(300.0)])
-    assert res["notified"] is False
-    assert captured == []  # nada enviado ainda
-    assert search.pending_alert_price == 300.0  # candidata armada
-
-
-def test_second_sighting_confirms_and_alerts(monkeypatch, captured):
-    search = _search()
-    _run(monkeypatch, search, [_offer(300.0)])
-    res = _run(monkeypatch, search, [_offer(300.0)])
-    assert res["notified"] is True
+    res = _run(monkeypatch, search, [_offer(300.0, provider="openai_web_search")])
+    assert res["notified"] is True                       # alerta SAIU na hora
     assert "busca rastreada" in captured[-1]
-    assert search.last_notification_at is not None
-    assert search.pending_alert_price is None  # pendência encerrada
+    assert "Confiabilidade: a confirmar" in captured[-1]  # mas marcado "a confirmar"
 
 
-def test_phantom_fare_seen_once_is_never_alerted(monkeypatch, captured):
+def test_real_price_source_is_marked_confirmed(monkeypatch, captured):
     search = _search()
-    _run(monkeypatch, search, [_offer(199.0)])  # tarifa fantasma aparece 1x
-    _run(monkeypatch, search, [])               # some na verificação seguinte
-    assert captured == []                        # nunca foi avisada
-    assert search.pending_alert_price is None    # candidata descartada
+    _run(monkeypatch, search, [_offer(300.0, provider="travelpayouts")])
+    assert "Confiabilidade: confirmada" in captured[-1]
 
 
-# ── Disponibilidade (após confirmação) ────────────────────────────────────────
+def test_corroborated_web_fare_is_marked_confirmed(monkeypatch, captured):
+    search = _search()
+    # Duas fontes web independentes com preço equivalente → corroborada.
+    _run(monkeypatch, search, [
+        _offer(300.0, provider="openai_web_search"),
+        _offer(305.0, provider="gemini_web_search"),
+    ])
+    assert "Confiabilidade: confirmada" in captured[-1]
+
+
+def test_fare_confidence_helper():
+    best = _offer(300.0, provider="openai_web_search")
+    # solitária
+    assert monitoring_bot._fare_confidence(best, [best]) == "unconfirmed"
+    # corroborada por outra fonte
+    other = _offer(310.0, provider="gemini_web_search")
+    assert monitoring_bot._fare_confidence(best, [best, other]) == "confirmed"
+    # fonte de preço real
+    real = _offer(300.0, provider="travelpayouts")
+    assert monitoring_bot._fare_confidence(real, [real]) == "confirmed"
+
+
+# ── Disponibilidade (após o alerta) ───────────────────────────────────────────
 
 def test_availability_lifecycle(monkeypatch, captured):
     search = _search()
-    _establish_alert(monkeypatch, search, 300.0)
+    _run(monkeypatch, search, [_offer(300.0)])  # alerta imediato
     assert "busca rastreada" in captured[-1]
     assert search.last_availability_state == "available"
     assert search.last_best_price == 300.0
@@ -116,24 +120,25 @@ def test_availability_lifecycle(monkeypatch, captured):
     assert res["availability_sent"] is True
     assert res["notified"] is False
 
-    # Oscila alguns reais, dentro da tolerância → ainda "disponível".
+    # Oscila dentro da tolerância → ainda "disponível".
     _run(monkeypatch, search, [_offer(312.0)])
     assert "Passagem ainda disponível" in captured[-1]
 
-    # Some (preço sobe muito acima do rastreado) → avisa UMA vez.
+    # Some (preço sobe muito) → avisa UMA vez e reancora.
     n_before = len(captured)
     _run(monkeypatch, search, [_offer(480.0)])
     assert "não está mais disponível" in captured[-1]
     assert len(captured) == n_before + 1
     assert search.last_availability_state == "unavailable"
-    assert search.last_notification_at is None  # rastreio reancorado
+    assert search.last_notification_at is None
 
 
 def test_unavailable_is_announced_only_once(monkeypatch, captured):
     search = _search()
-    _establish_alert(monkeypatch, search, 300.0)
+    _run(monkeypatch, search, [_offer(300.0)])
+    assert "busca rastreada" in captured[-1]
 
-    _run(monkeypatch, search, [])  # sem ofertas → "não está mais disponível"
+    _run(monkeypatch, search, [])  # sumiu → "não está mais disponível"
     assert "não está mais disponível" in captured[-1]
     count_after_first = len(captured)
 
@@ -141,19 +146,13 @@ def test_unavailable_is_announced_only_once(monkeypatch, captured):
     assert len(captured) == count_after_first
 
 
-def test_better_fare_also_requires_confirmation(monkeypatch, captured):
+def test_better_fare_alerts_immediately(monkeypatch, captured):
     search = _search()
-    _establish_alert(monkeypatch, search, 300.0)
-    n_before = len(captured)
+    _run(monkeypatch, search, [_offer(300.0)])
+    assert "busca rastreada" in captured[-1]
 
-    # Tarifa mais barata aparece 1x → confirma antes de avisar (não alerta já).
-    res = _run(monkeypatch, search, [_offer(250.0)])
-    assert res["notified"] is False
-    assert search.pending_alert_price == 250.0
-
-    # Reaparece → agora sim dispara o novo alerta de tarifa melhor.
+    # Tarifa mais barata aparece → novo alerta na hora (sem esperar ciclo).
     res = _run(monkeypatch, search, [_offer(250.0)])
     assert res["notified"] is True
     assert "busca rastreada" in captured[-1]
     assert search.last_best_price == 250.0
-    assert len(captured) > n_before

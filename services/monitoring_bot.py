@@ -31,11 +31,42 @@ TRACK_WINDOW = timedelta(hours=24)
 # ar (preço oscila alguns reais entre verificações). Acima disso, tratamos a
 # tarifa rastreada como indisponível.
 AVAILABILITY_TOLERANCE = 0.05
-# Confirmação anti-alucinação: uma tarifa nova só vira alerta quando reaparece
-# numa SEGUNDA verificação seguida com preço equivalente (dentro desta margem).
-# Corta os preços fantasma das fontes de busca web ao custo de ~1 ciclo (4h) de
-# atraso no primeiro alerta.
-CONFIRMATION_TOLERANCE = 0.05
+# Corroboração anti-alucinação SEM atraso: o alerta sai na hora, mas a tarifa só
+# é marcada "confirmada" quando vem de uma fonte de preço real (Travelpayouts/
+# conexões) OU quando uma segunda fonte independente, na MESMA busca, traz preço
+# equivalente (dentro desta margem). Tarifa solitária de busca web sai marcada
+# "a confirmar". Assim não se perde tarifa que some rápido e o fantasma fica
+# sinalizado em vez de filtrado.
+CORROBORATION_TOLERANCE = 0.05
+# Marcadores de fonte que NÃO são preço real (demo/mock/fallback de teste).
+_NON_REAL_SOURCE_MARKERS = ("demo", "mock", "fallback")
+
+
+def _source_label(option: dict) -> str:
+    return str(option.get("provider") or option.get("source") or "").lower()
+
+
+def _is_real_price_source(source: str) -> bool:
+    """Travelpayouts e conexões montadas a partir dele = preço real (não alucina).
+    Busca web (gemini/openai) não entra aqui."""
+    return "travelpayouts" in source and not any(m in source for m in _NON_REAL_SOURCE_MARKERS)
+
+
+def _fare_confidence(best: dict, options: list[dict], tolerance: float = CORROBORATION_TOLERANCE) -> str:
+    """'confirmed' quando a tarifa vem de fonte de preço real OU é corroborada
+    por outra fonte independente na mesma busca; senão 'unconfirmed'."""
+    if _is_real_price_source(_source_label(best)):
+        return "confirmed"
+    best_price = float(best.get("price_brl") or best.get("price") or 0)
+    dep = str(best.get("departure_date") or "")[:10]
+    sources: set[str] = set()
+    for opt in options:
+        if not opt or str(opt.get("departure_date") or "")[:10] != dep:
+            continue
+        if float(opt.get("price_brl") or opt.get("price") or 0) <= best_price * (1 + tolerance):
+            sources.add(_source_label(opt))
+    sources.discard("")
+    return "confirmed" if len(sources) >= 2 else "unconfirmed"
 
 
 def is_due(search: MonitoredSearch, now: datetime | None = None) -> bool:
@@ -130,37 +161,20 @@ def execute_monitored_search(db, search: MonitoredSearch) -> dict:
         )
         is_alert_candidate = worth_alert and not already_notified_recently
         if is_alert_candidate:
-            # Confirmação: só alerta quando a mesma boa tarifa (preço equivalente)
-            # já tinha aparecido na verificação anterior. Evita avisar um preço
-            # fantasma que some quando você vai olhar de manhã.
-            confirmed = (
-                search.pending_alert_price is not None
-                and best_price <= search.pending_alert_price * (1 + CONFIRMATION_TOLERANCE)
-            )
-            if confirmed:
-                status = dispatch_monitor_alert(search, best, rec.get("main_reason"))
-                notified = status == "sent"
-                if notified:
-                    search.last_availability_state = "available"
-                    # last_best_price = preço da passagem AVISADA (a que passamos
-                    # a rastrear). Ancora a verificação de disponibilidade e o
-                    # "melhor que o último avisado" — por isso só muda ao alertar.
-                    search.last_best_price = best_price
-                    search.last_best_link = best.get("booking_link")
-            else:
-                status_message = (
-                    "Tarifa candidata encontrada (R$ "
-                    + f"{best_price:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-                    + ") — confirmando na próxima verificação antes de avisar."
-                )
-
-    # Pendência de confirmação: mantém a candidata armada até virar alerta.
-    # - candidata ainda não confirmada/enviada → arma com o preço atual;
-    # - alerta enviado, ou nada digno de alerta nesta busca → limpa.
-    if is_alert_candidate and not notified:
-        search.pending_alert_price = best["price_brl"]
-    else:
-        search.pending_alert_price = None
+            # Alerta IMEDIATO (não perde tarifa que some rápido). A confiança da
+            # tarifa vai num selo: preço real ou corroborado por outra fonte na
+            # mesma busca → "confirmada"; tarifa solitária de busca web → "a
+            # confirmar". O fantasma fica sinalizado, não escondido.
+            confidence = _fare_confidence(best, options)
+            status = dispatch_monitor_alert(search, best, rec.get("main_reason"), confidence=confidence)
+            notified = status == "sent"
+            if notified:
+                search.last_availability_state = "available"
+                # last_best_price = preço da passagem AVISADA (a que passamos a
+                # rastrear). Ancora a verificação de disponibilidade e o "melhor
+                # que o último avisado" — por isso só muda ao alertar.
+                search.last_best_price = best_price
+                search.last_best_link = best.get("booking_link")
 
     # ── Sem alerta novo: reportar se a passagem rastreada ainda existe ─────────
     if not notified and tracking_a_fare:

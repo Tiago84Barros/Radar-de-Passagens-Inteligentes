@@ -10,12 +10,23 @@ from services.telegram_service import send_telegram_message
 from utils.formatters import format_date_br, format_duration_short, format_stops
 
 
-def build_monitor_alert_message(search: MonitoredSearch, option: dict, recommendation_reason: str | None = None) -> str:
+def build_monitor_alert_message(
+    search: MonitoredSearch,
+    option: dict,
+    recommendation_reason: str | None = None,
+    confidence: str | None = None,
+) -> str:
     """Build the Telegram message for a monitored-search hit.
 
     Includes every field required by spec: origem, destino, data ida/volta,
     companhia, preço, estimativa em milhas, duração total, escalas/conexões,
-    fonte/API, motivo da recomendação e link de compra."""
+    fonte/API, motivo da recomendação e link de compra.
+
+    ``confidence`` ("confirmed"/"unconfirmed") rende um selo de confiabilidade:
+    fontes de preço real (ou tarifa vista em +1 fonte na mesma busca) saem como
+    confirmadas; uma tarifa solitária de busca web sai marcada como "a confirmar"
+    — assim o alerta é imediato (não perde tarifa que some rápido) mas você sabe
+    o quanto pode confiar."""
     price = float(option.get("price_brl") or option.get("price") or 0)
     miles = estimate_miles_from_cash_price(price, search.min_mile_value or DEFAULT_CENTS_PER_MILE)
     airline = get_airline_name(option.get("airline") or "")
@@ -27,6 +38,7 @@ def build_monitor_alert_message(search: MonitoredSearch, option: dict, recommend
 
     return_date = option.get("return_date") or search.return_date
     price_block = _build_price_block(option, price, return_date)
+    confidence_line = _build_confidence_line(confidence)
 
     return (
         f"📡 Radar de Passagens Inteligentes — busca rastreada\n"
@@ -37,6 +49,7 @@ def build_monitor_alert_message(search: MonitoredSearch, option: dict, recommend
         f"🏢  Companhia: {airline}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"{price_block}"
+        f"{confidence_line}"
         f"🏆  Estimativa em milhas: {format_miles(miles)}\n"
         f"   ⚠️ Milhas estimadas — disponibilidade real depende do programa\n"
         f"⏱️  Duração total: {duration or '—'}\n"
@@ -47,6 +60,18 @@ def build_monitor_alert_message(search: MonitoredSearch, option: dict, recommend
         f"🔗  Link de compra: {link or '—'}\n"
         f"⏰  Encontrado em: {datetime.now(timezone.utc).strftime('%d/%m/%Y %H:%M UTC')}"
     )
+
+
+def _build_confidence_line(confidence: str | None) -> str:
+    """Selo de confiabilidade da tarifa, logo abaixo do preço."""
+    if confidence == "confirmed":
+        return "✅  Confiabilidade: confirmada (preço de fonte real ou visto em +1 fonte na mesma busca)\n"
+    if confidence == "unconfirmed":
+        return (
+            "⚠️  Confiabilidade: a confirmar — vista em apenas uma fonte de busca; "
+            "pode sair do ar rápido, confira no link antes de comprar\n"
+        )
+    return ""
 
 
 def _build_price_block(option: dict, price: float, return_date) -> str:
@@ -76,12 +101,17 @@ def _build_price_block(option: dict, price: float, return_date) -> str:
     return block
 
 
-def dispatch_monitor_alert(search: MonitoredSearch, option: dict, recommendation_reason: str | None = None) -> str:
+def dispatch_monitor_alert(
+    search: MonitoredSearch,
+    option: dict,
+    recommendation_reason: str | None = None,
+    confidence: str | None = None,
+) -> str:
     """Send the Telegram alert for a monitored-search hit. Returns a status string
     ("sent" / "telegram_not_configured" / "telegram_send_failed" / "skipped")."""
     if not search.telegram_enabled:
         return "skipped"
-    message = build_monitor_alert_message(search, option, recommendation_reason)
+    message = build_monitor_alert_message(search, option, recommendation_reason, confidence)
     ok, detail = send_telegram_message(message)
     return "sent" if ok else detail
 
