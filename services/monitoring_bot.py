@@ -18,7 +18,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import select
 
-from app.alerts import dispatch_monitor_alert
+from app.alerts import dispatch_availability_alert, dispatch_monitor_alert
 from app.db import MonitoredSearch, init_db, session_scope
 from providers.provider_manager import search_all_providers
 from services.decision_engine import REC_BUY, REC_MILES, build_purchase_recommendation
@@ -27,6 +27,10 @@ from services.recommendation_service import rank_flight_options
 RUNNABLE_STATUS = "active"
 DEFAULT_CHECK_FREQUENCY = timedelta(hours=4)
 TRACK_WINDOW = timedelta(hours=24)
+# Variação de preço tolerada para considerar que é "a mesma passagem" ainda no
+# ar (preço oscila alguns reais entre verificações). Acima disso, tratamos a
+# tarifa rastreada como indisponível.
+AVAILABILITY_TOLERANCE = 0.05
 
 
 def is_due(search: MonitoredSearch, now: datetime | None = None) -> bool:
@@ -93,25 +97,58 @@ def execute_monitored_search(db, search: MonitoredSearch) -> dict:
     best = ranking.get("recommended_option") or ranking.get("cheapest_option")
 
     notified = False
+    availability_sent = False
     status_message = "Nenhuma tarifa encontrada nesta verificação."
+
+    # Só faz sentido reportar "ainda disponível"/"não está mais disponível"
+    # quando já avisamos uma passagem antes (há uma tarifa rastreada).
+    tracking_a_fare = bool(search.last_notification_at and search.last_best_price)
+
+    fire_new_alert = False
     if best:
         rec = _recommendation_for(best, search)
+        best_price = best["price_brl"]
         status_message = (
-            f"Melhor tarifa: R$ {best['price_brl']:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            f"Melhor tarifa: R$ {best_price:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
             + f" — {rec['recommendation']}"
         )
         worth_alert = bool(
-            (search.max_price and best["price_brl"] <= search.max_price)
+            (search.max_price and best_price <= search.max_price)
             or rec["recommendation"] in {REC_BUY, REC_MILES}
         )
+        # Só re-alerta quando aparece algo MELHOR (mais barato) do que o último
+        # avisado — caso contrário caímos no aviso de disponibilidade abaixo.
         already_notified_recently = bool(
             search.last_notification_at
             and search.last_best_price
-            and best["price_brl"] >= search.last_best_price
+            and best_price >= search.last_best_price
         )
-        if worth_alert and not already_notified_recently:
+        fire_new_alert = worth_alert and not already_notified_recently
+        if fire_new_alert:
             status = dispatch_monitor_alert(search, best, rec.get("main_reason"))
             notified = status == "sent"
+            if notified:
+                search.last_availability_state = "available"
+
+    # ── Sem passagem melhor: reportar se a passagem rastreada ainda existe ─────
+    if not fire_new_alert and tracking_a_fare:
+        still_available = bool(best) and best["price_brl"] <= search.last_best_price * (1 + AVAILABILITY_TOLERANCE)
+        if still_available:
+            # Enquanto continuar disponível, avisa a cada verificação.
+            status = dispatch_availability_alert(search, available=True, option=best)
+            availability_sent = status == "sent"
+            search.last_availability_state = "available"
+            status_message = "Passagem ainda disponível."
+        elif search.last_availability_state != "unavailable":
+            # Sumiu — avisa UMA única vez e volta a aguardar a próxima oportunidade.
+            status = dispatch_availability_alert(search, available=False)
+            availability_sent = status == "sent"
+            search.last_availability_state = "unavailable"
+            status_message = "Passagem não está mais disponível — aguardando a próxima oportunidade."
+            # Reancora o rastreio: zera o histórico para que a próxima boa tarifa
+            # gere um alerta novo, mesmo custando mais que a passagem que sumiu.
+            search.last_best_price = None
+            search.last_notification_at = None
 
     search.last_checked_at = datetime.now(timezone.utc)
     search.updated_at = search.last_checked_at
@@ -123,7 +160,12 @@ def execute_monitored_search(db, search: MonitoredSearch) -> dict:
     if notified:
         search.last_notification_at = datetime.now(timezone.utc)
 
-    return {"ok": True, "message": status_message, "notified": notified}
+    return {
+        "ok": True,
+        "message": status_message,
+        "notified": notified,
+        "availability_sent": availability_sent,
+    }
 
 
 def run_due_monitors(force: bool = False) -> dict:
@@ -132,12 +174,19 @@ def run_due_monitors(force: bool = False) -> dict:
         searches = get_monitors_to_run(db, force=force)
         checked = 0
         notified = 0
+        availability_updates = 0
         for search in searches:
             result = execute_monitored_search(db, search)
             checked += 1
             if result.get("notified"):
                 notified += 1
-        return {"monitors_checked": checked, "alerts_sent": notified}
+            if result.get("availability_sent"):
+                availability_updates += 1
+        return {
+            "monitors_checked": checked,
+            "alerts_sent": notified,
+            "availability_updates": availability_updates,
+        }
 
 
 def _preferences(search: MonitoredSearch) -> dict:

@@ -53,6 +53,9 @@ class MonitoredSearch(Base):
     last_best_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     last_best_link: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     last_status_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Estado da passagem rastreada entre verificações ("available"/"unavailable").
+    # Permite avisar "não está mais disponível" uma única vez quando ela some.
+    last_availability_state: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
 
 
 _ENGINE: Engine | None = None
@@ -148,9 +151,22 @@ def _run_migration_ddl(engine: Engine, sql: str, *, retries: int = 6) -> bool:
 
 
 def ensure_schema() -> None:
-    """No legacy columns to migrate — monitored_searches is created by create_all.
-    Kept as a hook so future additive migrations have a single place to live."""
-    return None
+    """Additive column migrations for ``monitored_searches``.
+
+    ``create_all`` only creates missing *tables*, never missing *columns* on a
+    table that already exists in production — so new columns must be ALTERed in
+    here. Plain ``ADD COLUMN`` works on both PostgreSQL and SQLite; we guard with
+    an inspector so each column is added at most once."""
+    engine = get_engine()
+    insp = inspect(engine)
+    if "monitored_searches" not in insp.get_table_names():
+        return
+    existing = {c["name"] for c in insp.get_columns("monitored_searches")}
+    if "last_availability_state" not in existing:
+        _run_migration_ddl(
+            engine,
+            "ALTER TABLE monitored_searches ADD COLUMN last_availability_state VARCHAR(20)",
+        )
 
 
 @contextmanager

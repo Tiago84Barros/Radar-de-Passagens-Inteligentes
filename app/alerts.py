@@ -84,3 +84,48 @@ def dispatch_monitor_alert(search: MonitoredSearch, option: dict, recommendation
     message = build_monitor_alert_message(search, option, recommendation_reason)
     ok, detail = send_telegram_message(message)
     return "sent" if ok else detail
+
+
+def build_availability_message(search: MonitoredSearch, available: bool, option: dict | None = None) -> str:
+    """Build the Telegram update sent when no *better* fare turned up — it tells
+    the user whether the fare we last alerted is still on the market.
+
+    Resolve a dúvida "a passagem deixou de existir ou nunca existiu": a cada
+    verificação o bot reconfere a passagem e reporta o status."""
+    header = (
+        f"📡 Radar de Passagens Inteligentes — atualização do rastreio\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"✈️  Rota: {search.origin_iata} → {search.destination_iata}\n"
+        f"📅  Ida: {format_date_br(search.departure_date)}\n"
+        f"📅  Volta: {format_date_br(search.return_date)}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    )
+    stamp = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
+
+    if available and option:
+        price = float(option.get("price_brl") or option.get("price") or 0)
+        price_block = _build_price_block(option, price, option.get("return_date") or search.return_date)
+        link = option.get("booking_link") or option.get("link") or ""
+        return (
+            header
+            + f"✅  Passagem ainda disponível\n"
+            + price_block
+            + f"🔗  Link de compra: {link or '—'}\n"
+            + f"⏰  Verificado em: {stamp}"
+        )
+
+    return (
+        header
+        + f"❌  Passagem não está mais disponível, aguarde a próxima oportunidade\n"
+        + f"⏰  Verificado em: {stamp}"
+    )
+
+
+def dispatch_availability_alert(search: MonitoredSearch, available: bool, option: dict | None = None) -> str:
+    """Send the availability-status update via Telegram. Same return contract as
+    ``dispatch_monitor_alert``."""
+    if not search.telegram_enabled:
+        return "skipped"
+    message = build_availability_message(search, available, option)
+    ok, detail = send_telegram_message(message)
+    return "sent" if ok else detail
