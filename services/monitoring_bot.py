@@ -31,6 +31,11 @@ TRACK_WINDOW = timedelta(hours=24)
 # ar (preço oscila alguns reais entre verificações). Acima disso, tratamos a
 # tarifa rastreada como indisponível.
 AVAILABILITY_TOLERANCE = 0.05
+# Confirmação anti-alucinação: uma tarifa nova só vira alerta quando reaparece
+# numa SEGUNDA verificação seguida com preço equivalente (dentro desta margem).
+# Corta os preços fantasma das fontes de busca web ao custo de ~1 ciclo (4h) de
+# atraso no primeiro alerta.
+CONFIRMATION_TOLERANCE = 0.05
 
 
 def is_due(search: MonitoredSearch, now: datetime | None = None) -> bool:
@@ -104,7 +109,7 @@ def execute_monitored_search(db, search: MonitoredSearch) -> dict:
     # quando já avisamos uma passagem antes (há uma tarifa rastreada).
     tracking_a_fare = bool(search.last_notification_at and search.last_best_price)
 
-    fire_new_alert = False
+    is_alert_candidate = False
     if best:
         rec = _recommendation_for(best, search)
         best_price = best["price_brl"]
@@ -123,15 +128,42 @@ def execute_monitored_search(db, search: MonitoredSearch) -> dict:
             and search.last_best_price
             and best_price >= search.last_best_price
         )
-        fire_new_alert = worth_alert and not already_notified_recently
-        if fire_new_alert:
-            status = dispatch_monitor_alert(search, best, rec.get("main_reason"))
-            notified = status == "sent"
-            if notified:
-                search.last_availability_state = "available"
+        is_alert_candidate = worth_alert and not already_notified_recently
+        if is_alert_candidate:
+            # Confirmação: só alerta quando a mesma boa tarifa (preço equivalente)
+            # já tinha aparecido na verificação anterior. Evita avisar um preço
+            # fantasma que some quando você vai olhar de manhã.
+            confirmed = (
+                search.pending_alert_price is not None
+                and best_price <= search.pending_alert_price * (1 + CONFIRMATION_TOLERANCE)
+            )
+            if confirmed:
+                status = dispatch_monitor_alert(search, best, rec.get("main_reason"))
+                notified = status == "sent"
+                if notified:
+                    search.last_availability_state = "available"
+                    # last_best_price = preço da passagem AVISADA (a que passamos
+                    # a rastrear). Ancora a verificação de disponibilidade e o
+                    # "melhor que o último avisado" — por isso só muda ao alertar.
+                    search.last_best_price = best_price
+                    search.last_best_link = best.get("booking_link")
+            else:
+                status_message = (
+                    "Tarifa candidata encontrada (R$ "
+                    + f"{best_price:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                    + ") — confirmando na próxima verificação antes de avisar."
+                )
 
-    # ── Sem passagem melhor: reportar se a passagem rastreada ainda existe ─────
-    if not fire_new_alert and tracking_a_fare:
+    # Pendência de confirmação: mantém a candidata armada até virar alerta.
+    # - candidata ainda não confirmada/enviada → arma com o preço atual;
+    # - alerta enviado, ou nada digno de alerta nesta busca → limpa.
+    if is_alert_candidate and not notified:
+        search.pending_alert_price = best["price_brl"]
+    else:
+        search.pending_alert_price = None
+
+    # ── Sem alerta novo: reportar se a passagem rastreada ainda existe ─────────
+    if not notified and tracking_a_fare:
         still_available = bool(best) and best["price_brl"] <= search.last_best_price * (1 + AVAILABILITY_TOLERANCE)
         if still_available:
             # Enquanto continuar disponível, avisa a cada verificação.
@@ -152,10 +184,9 @@ def execute_monitored_search(db, search: MonitoredSearch) -> dict:
 
     search.last_checked_at = datetime.now(timezone.utc)
     search.updated_at = search.last_checked_at
-    if best:
-        if search.last_best_price is None or best["price_brl"] < search.last_best_price:
-            search.last_best_price = best["price_brl"]
-            search.last_best_link = best.get("booking_link")
+    # last_best_price/last_best_link são atualizados apenas quando um alerta é
+    # efetivamente enviado (acima) — refletem a passagem avisada, não toda
+    # cotação vista. O status corrente da busca vai em last_status_message.
     search.last_status_message = status_message[:500]
     if notified:
         search.last_notification_at = datetime.now(timezone.utc)
