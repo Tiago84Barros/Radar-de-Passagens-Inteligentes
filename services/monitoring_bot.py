@@ -176,5 +176,10 @@ def _offer_to_option(offer: dict, search: MonitoredSearch) -> dict:
         "origin_iata": offer.get("origin") or search.origin_iata,
         "destination_iata": offer.get("destination") or search.destination_iata,
         "score": int(offer.get("score") or 0),
+        # Detalhamento ida/volta — necessario para o alerta deixar claro se o
+        # preco e o total da viagem (ida + volta) ou somente um trecho.
+        "price_outbound": offer.get("price_outbound"),
+        "price_return": offer.get("price_return"),
+        "price_note": offer.get("price_note"),
     }
     return enrich_deal_with_miles(deal, search.min_mile_value or 0.035)

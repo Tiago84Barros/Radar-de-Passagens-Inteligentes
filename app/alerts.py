@@ -25,15 +25,18 @@ def build_monitor_alert_message(search: MonitoredSearch, option: dict, recommend
     link = option.get("booking_link") or option.get("link") or ""
     reason = recommendation_reason or "Melhor tarifa encontrada dentro da janela monitorada."
 
+    return_date = option.get("return_date") or search.return_date
+    price_block = _build_price_block(option, price, return_date)
+
     return (
         f"📡 Radar de Passagens Inteligentes — busca rastreada\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"✈️  Rota: {search.origin_iata} → {search.destination_iata}\n"
         f"📅  Ida: {format_date_br(option.get('departure_date') or search.departure_date)}\n"
-        f"📅  Volta: {format_date_br(option.get('return_date') or search.return_date)}\n"
+        f"📅  Volta: {format_date_br(return_date)}\n"
         f"🏢  Companhia: {airline}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"💰  Preço: {format_brl(price)}\n"
+        f"{price_block}"
         f"🏆  Estimativa em milhas: {format_miles(miles)}\n"
         f"   ⚠️ Milhas estimadas — disponibilidade real depende do programa\n"
         f"⏱️  Duração total: {duration or '—'}\n"
@@ -44,6 +47,33 @@ def build_monitor_alert_message(search: MonitoredSearch, option: dict, recommend
         f"🔗  Link de compra: {link or '—'}\n"
         f"⏰  Encontrado em: {datetime.now(timezone.utc).strftime('%d/%m/%Y %H:%M UTC')}"
     )
+
+
+def _build_price_block(option: dict, price: float, return_date) -> str:
+    """Render the price line(s) making it unambiguous whether the value is the
+    round-trip total (ida + volta) or a single leg — espelha a mesma lógica do
+    card no app. Quando há detalhamento, mostra "Ida X · Volta Y" abaixo."""
+    price_note = option.get("price_note") or ""
+    is_round_trip = bool(return_date) and price_note != "preco_somente_ida"
+
+    if not is_round_trip:
+        # Somente ida — explícito que o valor cobre apenas o trecho de ida.
+        suffix = " (estimado só para a ida — conexão via hub)" if price_note == "preco_somente_ida" else ""
+        return f"💰  Preço (somente ida): {format_brl(price)}{suffix}\n"
+
+    # Ida e volta: o preço é o valor TOTAL da viagem. Deriva o trecho que faltar
+    # a partir do total (total = ida + volta) para sempre mostrar os dois.
+    p_ida = option.get("price_outbound")
+    p_volta = option.get("price_return")
+    if p_ida and not p_volta and price > p_ida:
+        p_volta = round(price - p_ida, 2)
+    elif p_volta and not p_ida and price > p_volta:
+        p_ida = round(price - p_volta, 2)
+
+    block = f"💰  Preço (ida e volta — total): {format_brl(price)}\n"
+    if p_ida and p_volta:
+        block += f"   ↳ Ida {format_brl(p_ida)} · Volta {format_brl(p_volta)}\n"
+    return block
 
 
 def dispatch_monitor_alert(search: MonitoredSearch, option: dict, recommendation_reason: str | None = None) -> str:
