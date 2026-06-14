@@ -40,6 +40,17 @@ AVAILABILITY_TOLERANCE = 0.05
 CORROBORATION_TOLERANCE = 0.05
 # Marcadores de fonte que NÃO são preço real (demo/mock/fallback de teste).
 _NON_REAL_SOURCE_MARKERS = ("demo", "mock", "fallback")
+# Texto-âncora do aviso de indisponibilidade. Guardado em last_status_message,
+# ele faz as vezes de "estado": serve para avisar "não está mais disponível" uma
+# única vez, sem precisar de uma coluna nova (coluna nova = risco de migração que
+# não aplica e derruba todo o monitor).
+UNAVAILABLE_STATUS_MESSAGE = "Passagem não está mais disponível — aguardando a próxima oportunidade."
+
+
+def _already_announced_unavailable(search: MonitoredSearch) -> bool:
+    """True se a última verificação já avisou que a passagem sumiu (deriva do
+    last_status_message para não repetir o aviso)."""
+    return str(search.last_status_message or "").startswith(UNAVAILABLE_STATUS_MESSAGE)
 
 
 def _source_label(option: dict) -> str:
@@ -169,7 +180,6 @@ def execute_monitored_search(db, search: MonitoredSearch) -> dict:
             status = dispatch_monitor_alert(search, best, rec.get("main_reason"), confidence=confidence)
             notified = status == "sent"
             if notified:
-                search.last_availability_state = "available"
                 # last_best_price = preço da passagem AVISADA (a que passamos a
                 # rastrear). Ancora a verificação de disponibilidade e o "melhor
                 # que o último avisado" — por isso só muda ao alertar.
@@ -183,14 +193,13 @@ def execute_monitored_search(db, search: MonitoredSearch) -> dict:
             # Enquanto continuar disponível, avisa a cada verificação.
             status = dispatch_availability_alert(search, available=True, option=best)
             availability_sent = status == "sent"
-            search.last_availability_state = "available"
             status_message = "Passagem ainda disponível."
-        elif search.last_availability_state != "unavailable":
+        elif not _already_announced_unavailable(search):
             # Sumiu — avisa UMA única vez e volta a aguardar a próxima oportunidade.
+            # O "uma vez" é derivado do last_status_message (sem coluna extra).
             status = dispatch_availability_alert(search, available=False)
             availability_sent = status == "sent"
-            search.last_availability_state = "unavailable"
-            status_message = "Passagem não está mais disponível — aguardando a próxima oportunidade."
+            status_message = UNAVAILABLE_STATUS_MESSAGE
             # Reancora o rastreio: zera o histórico para que a próxima boa tarifa
             # gere um alerta novo, mesmo custando mais que a passagem que sumiu.
             search.last_best_price = None
@@ -220,8 +229,16 @@ def run_due_monitors(force: bool = False) -> dict:
         checked = 0
         notified = 0
         availability_updates = 0
+        errors = 0
         for search in searches:
-            result = execute_monitored_search(db, search)
+            # Defesa: uma falha numa busca (envio, dados estranhos) não pode
+            # derrubar o lote inteiro e silenciar as demais.
+            try:
+                result = execute_monitored_search(db, search)
+            except Exception as exc:  # noqa: BLE001
+                errors += 1
+                print(f"[monitor] busca {getattr(search, 'id', '?')} falhou: {exc}")
+                continue
             checked += 1
             if result.get("notified"):
                 notified += 1
@@ -231,6 +248,7 @@ def run_due_monitors(force: bool = False) -> dict:
             "monitors_checked": checked,
             "alerts_sent": notified,
             "availability_updates": availability_updates,
+            "errors": errors,
         }
 
 

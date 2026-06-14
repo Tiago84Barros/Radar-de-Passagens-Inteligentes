@@ -53,9 +53,6 @@ class MonitoredSearch(Base):
     last_best_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     last_best_link: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     last_status_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    # Estado da passagem rastreada entre verificações ("available"/"unavailable").
-    # Permite avisar "não está mais disponível" uma única vez quando ela some.
-    last_availability_state: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
 
 
 _ENGINE: Engine | None = None
@@ -151,23 +148,15 @@ def _run_migration_ddl(engine: Engine, sql: str, *, retries: int = 6) -> bool:
 
 
 def ensure_schema() -> None:
-    """Additive column migrations for ``monitored_searches``.
+    """Hook for additive column migrations on ``monitored_searches``.
 
-    ``create_all`` only creates missing *tables*, never missing *columns* on a
-    table that already exists in production — so new columns must be ALTERed in
-    here. Plain ``ADD COLUMN`` works on both PostgreSQL and SQLite; we guard with
-    an inspector so each column is added at most once."""
-    engine = get_engine()
-    insp = inspect(engine)
-    if "monitored_searches" not in insp.get_table_names():
-        return
-    existing = {c["name"] for c in insp.get_columns("monitored_searches")}
-    additive_columns = {
-        "last_availability_state": "ALTER TABLE monitored_searches ADD COLUMN last_availability_state VARCHAR(20)",
-    }
-    for column, ddl in additive_columns.items():
-        if column not in existing:
-            _run_migration_ddl(engine, ddl)
+    Currently a no-op: the model maps only columns created by ``create_all`` —
+    no extra ALTERs are needed. IMPORTANT: never map a column here that an
+    additive ``ALTER TABLE`` might fail to apply on the live DB — if the model
+    requires a column the database lacks, every ORM query raises and the whole
+    monitor run goes silent. State that used to need a new column is derived from
+    existing columns (see ``last_status_message`` usage in monitoring_bot)."""
+    return None
 
 
 @contextmanager

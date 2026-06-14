@@ -111,7 +111,6 @@ def test_availability_lifecycle(monkeypatch, captured):
     search = _search()
     _run(monkeypatch, search, [_offer(300.0)])  # alerta imediato
     assert "busca rastreada" in captured[-1]
-    assert search.last_availability_state == "available"
     assert search.last_best_price == 300.0
 
     # Mesma passagem ainda no ar (sem nada melhor) → "ainda disponível".
@@ -129,8 +128,7 @@ def test_availability_lifecycle(monkeypatch, captured):
     _run(monkeypatch, search, [_offer(480.0)])
     assert "não está mais disponível" in captured[-1]
     assert len(captured) == n_before + 1
-    assert search.last_availability_state == "unavailable"
-    assert search.last_notification_at is None
+    assert search.last_notification_at is None  # reancorado p/ próxima oportunidade
 
 
 def test_unavailable_is_announced_only_once(monkeypatch, captured):
@@ -144,6 +142,39 @@ def test_unavailable_is_announced_only_once(monkeypatch, captured):
 
     _run(monkeypatch, search, [])  # continua sem ofertas → NÃO repete
     assert len(captured) == count_after_first
+
+
+def test_run_due_monitors_end_to_end(tmp_path, monkeypatch, captured):
+    """Regressão do 'silêncio total': o run completo (carrega buscas do banco +
+    processa + envia) precisa funcionar contra um banco criado pelo create_all,
+    sem depender de migração de coluna nova. Cobre o caminho que quebrava quando
+    o model exigia uma coluna que o banco não tinha."""
+    from datetime import datetime, timezone
+
+    import app.db as db
+
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'radar.db'}")
+    monkeypatch.setattr(db, "_ENGINE", None)
+    monkeypatch.setattr(db, "_SESSION_LOCAL", None)
+    db.init_db()
+    with db.session_scope() as s:
+        s.add(MonitoredSearch(
+            status="active", origin_iata="BEL", destination_iata="FOR",
+            departure_date=date(2026, 7, 1), return_date=date(2026, 7, 6),
+            adults=1, max_price=500.0, min_mile_value=0.035, consider_miles=True,
+            telegram_enabled=True, created_at=datetime.now(timezone.utc),
+        ))
+
+    monkeypatch.setattr(monitoring_bot, "search_all_providers", lambda params: [_offer(300.0)])
+    result = monitoring_bot.run_due_monitors(force=True)
+
+    assert result["alerts_sent"] == 1
+    assert result["errors"] == 0
+    assert any("busca rastreada" in m for m in captured)
+
+    db.get_engine().dispose()
+    monkeypatch.setattr(db, "_ENGINE", None)
+    monkeypatch.setattr(db, "_SESSION_LOCAL", None)
 
 
 def test_better_fare_alerts_immediately(monkeypatch, captured):
