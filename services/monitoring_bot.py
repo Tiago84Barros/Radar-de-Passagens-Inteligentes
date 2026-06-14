@@ -225,7 +225,32 @@ def execute_monitored_search(db, search: MonitoredSearch) -> dict:
 def run_due_monitors(force: bool = False) -> dict:
     init_db()
     with session_scope() as db:
-        searches = get_monitors_to_run(db, force=force)
+        # Diagnóstico explícito: por que rodou (ou não) cada busca. Aparece no
+        # log do GitHub Actions e distingue "banco sem buscas" (provável banco
+        # diferente entre app e bot) de "buscas existem mas expiraram/pausadas".
+        now = datetime.now(timezone.utc)
+        all_rows = list(db.scalars(select(MonitoredSearch)))
+        active = [s for s in all_rows if (s.status or "").strip().lower() == RUNNABLE_STATUS]
+        in_window = [s for s in active if is_within_tracking_window(s, now)]
+        total = len(all_rows)
+        print(
+            f"[monitor] buscas no banco={total} | ativas={len(active)} | "
+            f"dentro_da_janela_24h={len(in_window)} | pausadas={total - len(active)} | "
+            f"expiradas={len(active) - len(in_window)}"
+        )
+        if total == 0:
+            print(
+                "[monitor] NENHUMA busca no banco que o bot lê. Se você criou buscas no app, "
+                "o app e o bot estão em bancos diferentes: confira se DATABASE_URL é o MESMO "
+                "nos secrets do Streamlit e do GitHub Actions."
+            )
+        elif len(in_window) == 0:
+            print(
+                "[monitor] Há buscas, mas nenhuma dentro da janela de 24h (ou todas pausadas). "
+                "Recrie a busca no app para reativar o rastreamento."
+            )
+
+        searches = get_monitors_to_run(db, now=now, force=force)
         checked = 0
         notified = 0
         availability_updates = 0
@@ -249,6 +274,9 @@ def run_due_monitors(force: bool = False) -> dict:
             "alerts_sent": notified,
             "availability_updates": availability_updates,
             "errors": errors,
+            "total_in_db": total,
+            "active": len(active),
+            "in_window": len(in_window),
         }
 
 
