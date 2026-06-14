@@ -9,7 +9,7 @@ Per spec, the bot does NOT feed the app's main screen with history. It only:
      last_best_price, last_best_link, last_status_message, ...).
 
 No quote history, no price graphs, no separate run-log table — the row IS the
-summary. Runs every 4h via ``.github/workflows/monitor-searches.yml`` (cron +
+summary. Runs every 2h via ``.github/workflows/monitor-searches.yml`` (cron +
 workflow_dispatch) through ``scripts/run_monitoring_bot.py``.
 """
 from __future__ import annotations
@@ -25,7 +25,7 @@ from services.decision_engine import REC_BUY, REC_MILES, build_purchase_recommen
 from services.recommendation_service import rank_flight_options
 
 RUNNABLE_STATUS = "active"
-DEFAULT_CHECK_FREQUENCY = timedelta(hours=4)
+DEFAULT_CHECK_FREQUENCY = timedelta(hours=2)
 TRACK_WINDOW = timedelta(hours=24)
 # Variação de preço tolerada para considerar que é "a mesma passagem" ainda no
 # ar (preço oscila alguns reais entre verificações). Acima disso, tratamos a

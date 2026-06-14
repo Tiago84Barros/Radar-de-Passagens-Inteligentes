@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Trigger the monitoring-bot workflow on GitHub Actions from the Streamlit app.
 
-The bot runs on a schedule in ``monitor-searches.yml`` (every 4h). This module
+The bot runs on a schedule in ``monitor-searches.yml`` (every 2h). This module
 lets the "Executar agora" action fire that workflow on demand via the REST API
 (``workflow_dispatch``), so a fresh check is picked up within seconds instead of
 waiting for the next cron tick.
