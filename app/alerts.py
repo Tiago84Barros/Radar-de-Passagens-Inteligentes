@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from app.db import MonitoredSearch
 from app.formatting import format_brl
@@ -8,6 +8,16 @@ from data.airlines_catalog import get_airline_name
 from services.miles_service import DEFAULT_CENTS_PER_MILE, estimate_miles_from_cash_price, format_miles
 from services.telegram_service import send_telegram_message
 from utils.formatters import format_date_br, format_duration_short, format_stops
+
+# Horário de Brasília (UTC−3). Offset fixo de propósito: o Brasil não tem mais
+# horário de verão, então −3 vale o ano todo e não depende do pacote tzdata
+# (que pode faltar no Windows ao testar localmente).
+BRASILIA_TZ = timezone(timedelta(hours=-3))
+
+
+def _now_local_str() -> str:
+    """Carimbo de data/hora no horário de Brasília, ex.: '14/06/2026 20:11 (horário de Brasília)'."""
+    return datetime.now(BRASILIA_TZ).strftime("%d/%m/%Y %H:%M") + " (horário de Brasília)"
 
 
 def build_monitor_alert_message(
@@ -58,7 +68,7 @@ def build_monitor_alert_message(
         f"💡  Motivo da recomendação: {reason}\n"
         f"🔌  Fonte: {source}\n"
         f"🔗  Link de compra: {link or '—'}\n"
-        f"⏰  Encontrado em: {datetime.now(timezone.utc).strftime('%d/%m/%Y %H:%M UTC')}"
+        f"⏰  Encontrado em: {_now_local_str()}"
     )
 
 
@@ -130,7 +140,7 @@ def build_availability_message(search: MonitoredSearch, available: bool, option:
         f"📅  Volta: {format_date_br(search.return_date)}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
     )
-    stamp = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
+    stamp = _now_local_str()
 
     if available and option:
         price = float(option.get("price_brl") or option.get("price") or 0)
