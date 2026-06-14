@@ -26,7 +26,8 @@ from services.recommendation_service import rank_flight_options
 
 RUNNABLE_STATUS = "active"
 DEFAULT_CHECK_FREQUENCY = timedelta(hours=2)
-TRACK_WINDOW = timedelta(hours=24)
+# Sem data de ida (raro), o rastreio cai neste teto a partir da criação.
+TRACK_FALLBACK_WINDOW = timedelta(days=365)
 # Variação de preço tolerada para considerar que é "a mesma passagem" ainda no
 # ar (preço oscila alguns reais entre verificações). Acima disso, tratamos a
 # tarifa rastreada como indisponível.
@@ -93,14 +94,22 @@ def is_due(search: MonitoredSearch, now: datetime | None = None) -> bool:
 
 
 def is_within_tracking_window(search: MonitoredSearch, now: datetime | None = None) -> bool:
-    """A monitor is active for 24h from creation (spec: "rastrear esta busca 24h")."""
+    """Rastreia uma busca ativa ATÉ A VIAGEM acontecer — até o fim do dia da data
+    de ida. Antes parava 24h após a criação, o que silenciava buscas legítimas:
+    a passagem segue interessando enquanto a viagem não passou. Sem data de ida,
+    cai num teto generoso a partir da criação."""
+    now = now or datetime.now(timezone.utc)
+    dep = getattr(search, "departure_date", None)
+    if dep:
+        dep_date = dep.date() if isinstance(dep, datetime) else dep
+        deadline = datetime(dep_date.year, dep_date.month, dep_date.day, 23, 59, 59, tzinfo=timezone.utc)
+        return now <= deadline
     if not search.created_at:
         return True
-    now = now or datetime.now(timezone.utc)
     created = search.created_at
     if created.tzinfo is None:
         created = created.replace(tzinfo=timezone.utc)
-    return now <= created + TRACK_WINDOW
+    return now <= created + TRACK_FALLBACK_WINDOW
 
 
 def get_monitors_to_run(db, now: datetime | None = None, force: bool = False) -> list[MonitoredSearch]:
@@ -235,8 +244,8 @@ def run_due_monitors(force: bool = False) -> dict:
         total = len(all_rows)
         print(
             f"[monitor] buscas no banco={total} | ativas={len(active)} | "
-            f"dentro_da_janela_24h={len(in_window)} | pausadas={total - len(active)} | "
-            f"expiradas={len(active) - len(in_window)}"
+            f"em_rastreio(ate_a_viagem)={len(in_window)} | pausadas={total - len(active)} | "
+            f"viagem_ja_passou={len(active) - len(in_window)}"
         )
         if total == 0:
             print(
@@ -246,8 +255,8 @@ def run_due_monitors(force: bool = False) -> dict:
             )
         elif len(in_window) == 0:
             print(
-                "[monitor] Há buscas, mas nenhuma dentro da janela de 24h (ou todas pausadas). "
-                "Recrie a busca no app para reativar o rastreamento."
+                "[monitor] Há buscas, mas nenhuma em rastreio (a data de ida já passou, ou "
+                "estão pausadas). Crie uma busca com data de ida futura."
             )
 
         searches = get_monitors_to_run(db, now=now, force=force)

@@ -79,11 +79,11 @@ def main() -> None:
             print(f"\n #{r.id}  {r.origin_iata} -> {r.destination_iata}")
             print(f"     status={r.status!r}  max_price={r.max_price}")
             print(f"     created_at={r.created_at}  last_checked_at={r.last_checked_at}")
-            print(f"     ativa={active}  dentro_da_janela_24h={in_window}  vencida_due={due}")
+            print(f"     ativa={active}  em_rastreio_ate_a_viagem={in_window}  vencida_due={due}")
             if not active:
                 print("     >> NÃO roda: status != 'active'.")
             elif not in_window:
-                print("     >> NÃO roda: passou das 24h desde a criação -> RECRIE a busca no app.")
+                print("     >> NÃO roda: a data de ida já passou -> crie uma busca com data futura.")
             elif not due:
                 print("     >> Ainda não venceu (rodaria no próximo tick de 2h, ou use --run/force).")
             else:

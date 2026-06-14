@@ -43,7 +43,7 @@ def _render_replace_dialog(config: dict, existing_summary: dict) -> None:
         new_d = str(config.get("destination_iata") or "").upper()
         st.session_state["monitor_feedback"] = {
             "level": "success",
-            "text": f"✅ Agora rastreando {new_o} → {new_d} por 24h.",
+            "text": f"✅ Agora rastreando {new_o} → {new_d} até a data da viagem.",
         }
         st.rerun()
     if c3.button("Cancelar", key="monitor_cancel", use_container_width=True):
@@ -70,9 +70,9 @@ def render_monitor_prompt(config: dict) -> None:
         _render_replace_dialog(config, conflict["existing"])
         return
 
-    st.markdown("**Deseja rastrear esta busca 24h?**")
+    st.markdown("**Deseja rastrear esta busca até a data da viagem?**")
     c1, c2 = st.columns(2)
-    if c1.button("Sim, rastrear 24h", key="monitor_yes", type="primary", use_container_width=True):
+    if c1.button("Sim, rastrear", key="monitor_yes", type="primary", use_container_width=True):
         # st.rerun() lança uma exceção interna do Streamlit — chamado dentro do
         # `with session_scope()`, derruba a transação em rollback e a busca
         # nunca era gravada. Por isso a decisão acontece dentro da transação,
@@ -103,7 +103,7 @@ def render_monitor_prompt(config: dict) -> None:
                 outcome = {
                     "feedback": {
                         "level": "success",
-                        "text": f"✅ Rastreamento de 24h ativado para {o} → {d}.",
+                        "text": f"✅ Rastreamento ativado para {o} → {d} até a data da viagem.",
                     }
                 }
         if outcome and outcome.get("feedback"):

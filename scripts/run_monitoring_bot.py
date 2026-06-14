@@ -16,7 +16,7 @@ if __name__ == "__main__":
     result = run_due_monitors(force=force)
     print(
         f"Buscas no banco: {result.get('total_in_db', '?')} "
-        f"(ativas: {result.get('active', '?')}, dentro da janela 24h: {result.get('in_window', '?')})"
+        f"(ativas: {result.get('active', '?')}, em rastreio até a viagem: {result.get('in_window', '?')})"
     )
     print(f"Buscas monitoradas verificadas: {result['monitors_checked']}")
     print(f"Alertas enviados: {result['alerts_sent']}")

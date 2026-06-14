@@ -122,7 +122,7 @@ def build_purchase_recommendation(
             "main_reason": "Nenhuma tarifa disponível para avaliar agora.",
             "supporting_reasons": [
                 "O radar ainda não coletou preços para esta busca.",
-                "Clique em Buscar agora ou ative o monitoramento 24h.",
+                "Clique em Buscar agora ou ative o monitoramento da rota.",
             ],
             "best_cash_option": None,
             "best_miles_option": None,

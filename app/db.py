@@ -17,7 +17,7 @@ class Base(DeclarativeBase):
 
 
 class MonitoredSearch(Base):
-    """A search the user opted to track for 24h. Stores ONLY the search config and
+    """A search the user opted to track until the trip. Stores ONLY the search config and
     a status summary — never a price/result history (spec: sem banco historico).
 
     The bot re-runs this search on a schedule, updates the summary fields below,

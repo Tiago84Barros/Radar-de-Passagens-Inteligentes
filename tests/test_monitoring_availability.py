@@ -144,14 +144,38 @@ def test_unavailable_is_announced_only_once(monkeypatch, captured):
     assert len(captured) == count_after_first
 
 
+def test_tracking_window_follows_departure_date():
+    """Rastreia até a data da viagem (não mais 24h após a criação)."""
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    future = _search()
+    future.departure_date = (now + timedelta(days=30)).date()
+    assert monitoring_bot.is_within_tracking_window(future, now) is True
+
+    past = _search()
+    past.departure_date = (now - timedelta(days=1)).date()
+    assert monitoring_bot.is_within_tracking_window(past, now) is False
+
+    # Busca criada há muito tempo, mas viagem ainda no futuro -> continua ativa
+    # (o bug antigo a expirava em 24h).
+    old_creation = _search()
+    old_creation.created_at = now - timedelta(days=10)
+    old_creation.departure_date = (now + timedelta(days=5)).date()
+    assert monitoring_bot.is_within_tracking_window(old_creation, now) is True
+
+
 def test_run_due_monitors_end_to_end(tmp_path, monkeypatch, captured):
     """Regressão do 'silêncio total': o run completo (carrega buscas do banco +
     processa + envia) precisa funcionar contra um banco criado pelo create_all,
     sem depender de migração de coluna nova. Cobre o caminho que quebrava quando
     o model exigia uma coluna que o banco não tinha."""
-    from datetime import datetime, timezone
+    from datetime import datetime, timedelta, timezone
 
     import app.db as db
+
+    # Data de ida no futuro (relativa a agora) — o rastreio vai até a viagem.
+    future_dep = (datetime.now(timezone.utc) + timedelta(days=60)).date()
 
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'radar.db'}")
     monkeypatch.setattr(db, "_ENGINE", None)
@@ -160,7 +184,7 @@ def test_run_due_monitors_end_to_end(tmp_path, monkeypatch, captured):
     with db.session_scope() as s:
         s.add(MonitoredSearch(
             status="active", origin_iata="BEL", destination_iata="FOR",
-            departure_date=date(2026, 7, 1), return_date=date(2026, 7, 6),
+            departure_date=future_dep, return_date=future_dep + timedelta(days=5),
             adults=1, max_price=500.0, min_mile_value=0.035, consider_miles=True,
             telegram_enabled=True, created_at=datetime.now(timezone.utc),
         ))

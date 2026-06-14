@@ -654,11 +654,11 @@ def _render_search_tab() -> None:
 
 def _render_monitored_tab() -> None:
     st.title("📡 Buscas monitoradas")
-    st.caption("O radar acompanha estas rotas por 24h e avisa no Telegram quando encontra a melhor tarifa.")
+    st.caption("O radar acompanha estas rotas até a data da viagem e avisa no Telegram quando encontra a melhor tarifa.")
 
     monitors = search_control_service.list_monitored()
     if not monitors:
-        st.info("Nenhuma busca está sendo monitorada agora. Ative o rastreamento de 24h após uma busca na aba Buscar.")
+        st.info("Nenhuma busca está sendo monitorada agora. Ative o rastreamento após uma busca na aba Buscar.")
         return
 
     for m in monitors:
