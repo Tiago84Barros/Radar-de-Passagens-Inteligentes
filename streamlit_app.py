@@ -461,6 +461,16 @@ _LEG_SORT_OPTIONS = {
 }
 
 
+def _leg_budget(total_max_price) -> float | None:
+    """Teto de UM trecho (ida ou volta) = metade do orçamento total da viagem.
+    None quando não há limite (0/None)."""
+    try:
+        total = float(total_max_price or 0)
+    except (TypeError, ValueError):
+        return None
+    return (total / 2.0) if total > 0 else None
+
+
 def _render_leg_section(
     title: str, subtitle: str, options: list[dict], *, key: str, form: dict, diag: dict | None = None
 ) -> None:
@@ -492,10 +502,10 @@ def _render_leg_section(
         key=f"leg_sort_{key}",
     )
     prefs = dict(form, sort_by=_LEG_SORT_OPTIONS[sort_label])
-    # max_price é o orçamento TOTAL da viagem (ida + volta). Um trecho avulso não
-    # deve ser penalizado contra esse teto — ele só vale para o pacote ida+volta.
+    # max_price é o orçamento TOTAL da viagem (ida + volta), dividido igualmente:
+    # cada trecho (ida ou volta) é limitado à METADE desse total.
     if key in ("ida", "volta"):
-        prefs["max_price"] = None
+        prefs["max_price"] = _leg_budget(form.get("max_price"))
     ranking = rank_flight_options(options, prefs)
     for option in ranking["sorted_options"]:
         _render_result_card(option, form.get("min_mile_value") or DEFAULT_CENTS_PER_MILE)
@@ -524,10 +534,10 @@ def _render_search_tab() -> None:
             value=0.0,
             step=50.0,
             help=(
-                "Orçamento TOTAL da viagem: ida + volta (ou a tarifa única, se for só ida). "
-                "Os blocos 'Voos de ida' e 'Voos de volta' mostram preços de um trecho cada e "
-                "não usam este teto; ele vale para o 'Pacote ida e volta' e para o alerta do "
-                "Telegram. 0 = sem limite."
+                "Quanto você aceita pagar pela viagem inteira (ida + volta). O app divide "
+                "igualmente entre os trechos: cada lado é limitado à metade desse total. "
+                "Ex.: R$ 4.000 → ida até R$ 2.000 e volta até R$ 2.000. "
+                "Em viagem só de ida, é a tarifa única. 0 = sem limite."
             ),
         )
         consider_miles = st.checkbox("Considerar opções em milhas", value=True)
@@ -708,9 +718,13 @@ def _render_search_tab() -> None:
         # Ida e volta: trechos buscados separadamente — opções de ida em cima,
         # opções de volta embaixo, cada bloco com sua própria ordenação.
         diagnostics = results_data.get("diagnostics") or {}
+        # Teto de cada trecho = metade do orçamento total — exibido no subtítulo
+        # para o usuário ver as três informações: total, ida (½) e volta (½).
+        _leg_cap = _leg_budget(form.get("max_price"))
+        _cap_note = f" · 💰 Teto deste trecho: {format_brl(_leg_cap)} (½ do orçamento)" if _leg_cap else ""
         _render_leg_section(
             "🛫 Voos de ida",
-            f"{form['origin_iata']} → {form['destination_iata']} · {format_date_br(form['departure_date'])}",
+            f"{form['origin_iata']} → {form['destination_iata']} · {format_date_br(form['departure_date'])}{_cap_note}",
             outbound,
             key="ida",
             form=form,
@@ -719,7 +733,7 @@ def _render_search_tab() -> None:
         st.markdown("---")
         _render_leg_section(
             "🛬 Voos de volta",
-            f"{form['destination_iata']} → {form['origin_iata']} · {format_date_br(form['return_date'])}",
+            f"{form['destination_iata']} → {form['origin_iata']} · {format_date_br(form['return_date'])}{_cap_note}",
             inbound,
             key="volta",
             form=form,
