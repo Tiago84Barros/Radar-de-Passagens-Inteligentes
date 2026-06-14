@@ -71,6 +71,29 @@ def test_search_flights_handles_markdown_fenced_json(provider, monkeypatch):
     assert len(results) == 2
 
 
+def test_discards_implausible_low_prices(provider, monkeypatch):
+    """Valores absurdos (R$ 1,90 = alucinacao de escala) sao descartados; a
+    tarifa real e o preco em milhas valido sobrevivem."""
+    payload = json.dumps([
+        {"companhia": "Avianca", "origem": "bel", "destino": "jfk", "data_ida": "2026-12-14",
+         "preco_brl": 1.90, "milhas": {"programa": "LifeMiles", "quantidade": 35, "taxas_brl": 150.0},
+         "link": "https://example.com/a", "fonte": "x"},
+        {"companhia": "LATAM", "origem": "bel", "destino": "jfk", "data_ida": "2026-12-14",
+         "preco_brl": 4200.00, "milhas": {"programa": "Latam Pass", "quantidade": 40, "taxas_brl": 180.0},
+         "link": "https://example.com/b", "fonte": "y"},
+    ])
+    monkeypatch.setattr(provider, "_call_gemini", lambda prompt: payload)
+
+    results = provider.search_flights("BEL", "JFK", "2026-12-14")
+
+    # A oferta de R$ 1,90 some; sobra a de R$ 4.200.
+    assert len(results) == 1
+    assert results[0]["airline"] == "LATAM"
+    assert results[0]["price"] == 4200.00
+    # Milhas implausiveis (40) sao ignoradas — sem miles_offer.
+    assert results[0].get("miles_offer") is None
+
+
 def test_one_way_search_discards_round_trip_items(provider, monkeypatch):
     """Busca somente ida: itens com data_volta sao pacotes ida+volta (preco do
     pacote, nao do trecho) e devem ser descartados."""

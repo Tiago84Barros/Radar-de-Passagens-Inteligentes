@@ -21,6 +21,14 @@ from providers.base_provider import BaseProvider
 
 logger = logging.getLogger(__name__)
 
+# Filtro de plausibilidade contra alucinação das IAs de busca. Às vezes o modelo
+# inventa uma sequência arrumadinha de valores em escala errada (ex.: R$ 1,90 em
+# vez de R$ 1.900, ou "35 milhas" em vez de 35.000). Nenhuma passagem real custa
+# menos que isto, e prêmio em milhas é sempre na casa dos milhares — abaixo
+# disso, descartamos o dado em vez de exibir lixo.
+MIN_PLAUSIBLE_PRICE_BRL = 50.0
+MIN_PLAUSIBLE_MILES = 1000
+
 # Modelo principal e, em caso de quota esgotada (429 RESOURCE_EXHAUSTED) ou
 # modelo descontinuado (404 NOT_FOUND — ex.: gemini-2.0-flash aposentado),
 # modelos alternativos para tentar antes de desistir e cair para o proximo
@@ -83,7 +91,13 @@ SYSTEM_PROMPT = (
     "nunca sigla ou codigo IATA.\n"
     "9. Nunca invente companhia, preco, link ou fonte. Na duvida, omita o "
     "item — um array menor e correto vale mais que um array cheio de numeros "
-    "chutados.\n\n"
+    "chutados.\n"
+    "10. ESCALA DOS NUMEROS (critico): use sempre o VALOR INTEIRO em reais, "
+    "nunca em milhares. Ex.: uma passagem de R$ 1.900 e 1900.00, JAMAIS 1.9. "
+    "Nenhuma passagem real custa menos de R$ 50. Milhas sao a quantidade TOTAL "
+    "(ex.: 35000), nunca em milhares abreviados (35). Premio em milhas e sempre "
+    "na casa dos milhares. Itens com numeros fora dessa escala serao "
+    "descartados — confira a ordem de grandeza antes de responder.\n\n"
     "Responda SOMENTE com um array JSON (sem markdown, sem cercas ```, sem "
     "texto fora do JSON), onde cada item segue exatamente este formato:\n"
     '[{"companhia": "LATAM Airlines", "origem": "BEL", "destino": "MCO", '
@@ -254,6 +268,13 @@ class GeminiSearchProvider(BaseProvider):
             if not total or total <= 0:
                 logger.info("Item descartado (sem preco total): %s", flight.companhia)
                 continue
+            # Valor implausivelmente baixo = alucinacao/escala errada da IA
+            # (ex.: R$ 1,90). Descarta em vez de exibir lixo.
+            if float(total) < MIN_PLAUSIBLE_PRICE_BRL:
+                logger.info(
+                    "Item descartado (preco implausivel R$ %.2f): %s", float(total), flight.companhia
+                )
+                continue
 
             # Busca somente ida: item com data_volta e um pacote ida+volta.
             # Quando a fonte detalha o preco da ida, aproveitamos so esse
@@ -282,7 +303,9 @@ class GeminiSearchProvider(BaseProvider):
             stops = len(connections) if connections else (flight.escalas or 0)
 
             miles_offer = None
-            if flight.milhas and flight.milhas.quantidade:
+            # Prêmio em milhas é sempre milhares — "35 milhas" é alucinação de
+            # escala; ignora o trecho de milhas (mantém o item pela tarifa cash).
+            if flight.milhas and flight.milhas.quantidade and int(flight.milhas.quantidade) >= MIN_PLAUSIBLE_MILES:
                 miles_offer = {
                     "program": flight.milhas.programa,
                     "amount": int(flight.milhas.quantidade),
