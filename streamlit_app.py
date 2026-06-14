@@ -170,12 +170,97 @@ def _run_manual_search(form: dict) -> dict[str, list[dict]]:
         packages = search_all_providers({**params, "return_date": form["return_date"]})
         diag_packages = get_last_provider_diagnostic()
 
+    outbound_opts = [_offer_to_option(o, min_mile_value) for o in outbound]
+    inbound_opts = [_offer_to_option(o, min_mile_value) for o in inbound]
+    package_opts = [_offer_to_option(o, min_mile_value) for o in packages]
+
+    # As fontes raramente devolvem o combo ida+volta fechado. Quando não vier
+    # nenhum, montamos pacotes somando a ida + volta mais baratas (e combos por
+    # companhia), para o bloco "Pacotes ida e volta" sempre mostrar um total.
+    if form.get("return_date") and not package_opts:
+        package_opts = _synthesize_packages(outbound_opts, inbound_opts, form, min_mile_value)
+
     return {
-        "outbound": [_offer_to_option(o, min_mile_value) for o in outbound],
-        "return": [_offer_to_option(o, min_mile_value) for o in inbound],
-        "packages": [_offer_to_option(o, min_mile_value) for o in packages],
+        "outbound": outbound_opts,
+        "return": inbound_opts,
+        "packages": package_opts,
         "diagnostics": {"ida": diag_outbound, "volta": diag_inbound, "pacotes": diag_packages},
     }
+
+
+def _synthesize_packages(
+    outbound_opts: list[dict], inbound_opts: list[dict], form: dict, min_mile_value: float
+) -> list[dict]:
+    """Monta pacotes ida+volta somando trechos quando as fontes não trazem o
+    combo fechado: o overall mais barato (ida + volta) e, quando a mesma
+    companhia aparece nos dois trechos, o combo dela. Preço = ida + volta."""
+    from services.miles_service import enrich_deal_with_miles
+
+    def _valid(opts: list[dict]) -> list[dict]:
+        return sorted(
+            [o for o in opts if float(o.get("price_brl") or 0) > 0],
+            key=lambda o: float(o.get("price_brl") or 0),
+        )
+
+    out = _valid(outbound_opts)
+    inn = _valid(inbound_opts)
+    if not out or not inn:
+        return []
+
+    # Pares candidatos: o mais barato geral + o mais barato de cada companhia
+    # presente nos dois trechos.
+    pairs: list[tuple[dict, dict]] = [(out[0], inn[0])]
+    cheapest_in_by_airline: dict[str, dict] = {}
+    for o in inn:
+        cheapest_in_by_airline.setdefault(str(o.get("airline") or "").strip().lower(), o)
+    seen_out_airline: set[str] = set()
+    for o in out:
+        air = str(o.get("airline") or "").strip().lower()
+        if not air or air in seen_out_airline:
+            continue
+        seen_out_airline.add(air)
+        match = cheapest_in_by_airline.get(air)
+        if match:
+            pairs.append((o, match))
+
+    packages: list[dict] = []
+    seen_totals: set[tuple] = set()
+    for ida, volta in pairs:
+        p_ida = float(ida.get("price_brl") or 0)
+        p_volta = float(volta.get("price_brl") or 0)
+        total = round(p_ida + p_volta, 2)
+        same_airline = str(ida.get("airline") or "").strip().lower() == str(volta.get("airline") or "").strip().lower()
+        airline = (ida.get("airline") or "") if same_airline else f"{ida.get('airline') or '?'} (ida) + {volta.get('airline') or '?'} (volta)"
+        dedupe_key = (round(total, 2), airline)
+        if dedupe_key in seen_totals:
+            continue
+        seen_totals.add(dedupe_key)
+        dur_ida, dur_volta = ida.get("duration_minutes"), volta.get("duration_minutes")
+        duration = (dur_ida + dur_volta) if (dur_ida and dur_volta) else None
+        deal = {
+            "price_brl": total,
+            "price_outbound": p_ida,
+            "price_return": p_volta,
+            "airline": airline,
+            "provider": "montado: ida + volta (2 bilhetes)",
+            "source": "montado_ida_volta",
+            "stops": (int(ida.get("stops") or 0) + int(volta.get("stops") or 0)),
+            "duration_minutes": duration,
+            "departure_date": form.get("departure_date"),
+            "return_date": form.get("return_date"),
+            "booking_link": "",  # dois bilhetes separados — sem link único
+            "origin_iata": form.get("origin_iata") or "",
+            "destination_iata": form.get("destination_iata") or "",
+            "price_note": None,  # é o total da viagem, não "somente ida"
+            "connections": [],
+            "miles_offer": None,
+            "category": "pacote_montado",
+            "score": 0,
+        }
+        packages.append(enrich_deal_with_miles(deal, min_mile_value))
+
+    packages.sort(key=lambda o: float(o.get("price_brl") or 0))
+    return packages[:6]
 
 
 # ── Result cards ──────────────────────────────────────────────────────────────
@@ -407,6 +492,10 @@ def _render_leg_section(
         key=f"leg_sort_{key}",
     )
     prefs = dict(form, sort_by=_LEG_SORT_OPTIONS[sort_label])
+    # max_price é o orçamento TOTAL da viagem (ida + volta). Um trecho avulso não
+    # deve ser penalizado contra esse teto — ele só vale para o pacote ida+volta.
+    if key in ("ida", "volta"):
+        prefs["max_price"] = None
     ranking = rank_flight_options(options, prefs)
     for option in ranking["sorted_options"]:
         _render_result_card(option, form.get("min_mile_value") or DEFAULT_CENTS_PER_MILE)
@@ -429,7 +518,18 @@ def _render_search_tab() -> None:
 
         st.markdown("---")
         st.markdown("**Preferências**")
-        max_price = st.number_input("Preço máximo (R$)", min_value=0.0, value=0.0, step=50.0, help="0 = sem limite")
+        max_price = st.number_input(
+            "Preço máximo da viagem (R$)",
+            min_value=0.0,
+            value=0.0,
+            step=50.0,
+            help=(
+                "Orçamento TOTAL da viagem: ida + volta (ou a tarifa única, se for só ida). "
+                "Os blocos 'Voos de ida' e 'Voos de volta' mostram preços de um trecho cada e "
+                "não usam este teto; ele vale para o 'Pacote ida e volta' e para o alerta do "
+                "Telegram. 0 = sem limite."
+            ),
+        )
         consider_miles = st.checkbox("Considerar opções em milhas", value=True)
         min_mile_value = st.number_input(
             "Valor mínimo aceitável por milha (R$)", min_value=0.001, value=DEFAULT_CENTS_PER_MILE, step=0.001, format="%.3f"
@@ -596,7 +696,11 @@ def _render_search_tab() -> None:
             st.caption(f"🔎 Diagnóstico: {coverage_note}")
         return
 
-    _all_demo = all("demo" in str(r.get("provider") or r.get("source") or "").lower() for r in results)
+    # Pacotes montados derivam dos trechos — não contam para decidir "modo demo".
+    _real_results = [r for r in results if r.get("source") != "montado_ida_volta"]
+    _all_demo = bool(_real_results) and all(
+        "demo" in str(r.get("provider") or r.get("source") or "").lower() for r in _real_results
+    )
     if _all_demo:
         st.info("⚠️ Modo demonstração — Travelpayouts não retornou tarifas reais para esta rota/data. Os valores exibidos são estimativas ilustrativas, não preços reais.")
 
@@ -622,12 +726,22 @@ def _render_search_tab() -> None:
             diag=diagnostics.get("volta"),
         )
         st.markdown("---")
-        _render_leg_section(
-            "📦 Pacotes ida e volta",
+        _packages = results_data.get("packages") or []
+        _synthesized = any(p.get("source") == "montado_ida_volta" for p in _packages)
+        _pkg_subtitle = (
             f"{form['origin_iata']} → {form['destination_iata']} → {form['origin_iata']} · "
             f"{format_date_br(form['departure_date'])} → {format_date_br(form['return_date'])} · "
-            "Preço e milhas valem pela viagem completa (ida + volta).",
-            results_data.get("packages") or [],
+            "Preço e milhas valem pela viagem completa (ida + volta)."
+        )
+        if _synthesized:
+            _pkg_subtitle += (
+                " · 🧩 Montado a partir da ida + volta mais baratas (2 bilhetes separados — "
+                "as fontes não trouxeram o pacote fechado)."
+            )
+        _render_leg_section(
+            "📦 Pacotes ida e volta",
+            _pkg_subtitle,
+            _packages,
             key="pacotes",
             form=form,
             diag=diagnostics.get("pacotes"),
