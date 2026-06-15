@@ -125,6 +125,9 @@ def _offer_to_option(offer: dict, min_mile_value: float) -> dict:
         "connections": offer.get("connections") or [],
         "miles_offer": offer.get("miles_offer"),
         "category": offer.get("category"),
+        "source_confidence": offer.get("source_confidence"),
+        "separate_ticket": offer.get("separate_ticket"),
+        "connection_risk": offer.get("connection_risk"),
     }
     return enrich_deal_with_miles(deal, min_mile_value)
 
@@ -237,6 +240,9 @@ def _synthesize_packages(
         seen_totals.add(dedupe_key)
         dur_ida, dur_volta = ida.get("duration_minutes"), volta.get("duration_minutes")
         duration = (dur_ida + dur_volta) if (dur_ida and dur_volta) else None
+        # Confiabilidade do pacote = a pior dos dois trechos.
+        _confs = {str(ida.get("source_confidence") or ""), str(volta.get("source_confidence") or "")}
+        pkg_conf = "demo" if "demo" in _confs else ("unverified" if "unverified" in _confs else "real")
         deal = {
             "price_brl": total,
             "price_outbound": p_ida,
@@ -255,6 +261,7 @@ def _synthesize_packages(
             "connections": [],
             "miles_offer": None,
             "category": "pacote_montado",
+            "source_confidence": pkg_conf,
             "score": 0,
         }
         packages.append(enrich_deal_with_miles(deal, min_mile_value))
@@ -423,6 +430,26 @@ def _render_result_card(option: dict, min_mile_value: float) -> None:
         if price_note == "preco_somente_ida"
         else ""
     )
+
+    # Selo de confiabilidade da fonte do preço.
+    confidence = str(option.get("source_confidence") or "").lower()
+    if confidence == "unverified":
+        price_note_html += (
+            '<div class="result-card-price-note">⚠️ Preço informado por IA (busca web) — '
+            'NÃO validado. Confirme no site da companhia antes de comprar.</div>'
+        )
+    elif confidence == "demo":
+        price_note_html += (
+            '<div class="result-card-price-note">⚠️ Valor ilustrativo (demonstração) — não é preço real.</div>'
+        )
+
+    # Aviso de risco de conexão para combos de bilhetes separados.
+    if option.get("separate_ticket"):
+        _troca = " com troca de companhia" if option.get("airline_change") else ""
+        price_note_html += (
+            f'<div class="result-card-price-note">⚠️ 2 bilhetes separados{_troca} (sem proteção de '
+            'conexão). Deixe 6h+ entre os voos — se o 1º atrasar, o 2º é perdido.</div>'
+        )
 
     # st.html() bypasses Streamlit's Markdown parser entirely — avoids the bug
     # where 4+ spaces of indentation or special chars in URLs (& = ? `) cause the

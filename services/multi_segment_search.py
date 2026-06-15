@@ -25,6 +25,11 @@ from services.air_network import find_candidate_hubs, hub_route_label, is_domest
 
 # Minimum layover time at the connection hub (minutes)
 LAYOVER_MINUTES = 90
+# Conexão entre BILHETES SEPARADOS (combos montados de 2 fontes one-way) não tem
+# proteção: se o 1º voo atrasa, o 2º é perdido sem reacomodação. Recomenda-se
+# uma folga grande — sobretudo com troca de companhia (precisa retirar bagagem,
+# fazer novo check-in, às vezes passar pela imigração).
+SEPARATE_TICKET_MIN_LAYOVER_MINUTES = 360  # 6h
 
 # Maximum total duration penalty for combined vs direct routes
 # (we skip combined routes that take vastly longer)
@@ -176,7 +181,8 @@ def _merge_segments(
 
     airline1 = get_airline_name((leg1.get("airline") or "").strip())
     airline2 = get_airline_name((leg2.get("airline") or "").strip())
-    if airline1 and airline2 and airline1 != airline2:
+    airline_change = bool(airline1 and airline2 and airline1 != airline2)
+    if airline_change:
         airline_label = f"{airline1} + {airline2}"
     else:
         airline_label = airline1 or airline2 or "–"
@@ -213,6 +219,12 @@ def _merge_segments(
         "duration_minutes": total_duration,
         "stops": 1,
         "connections": [{"airport": hub, "wait_minutes": LAYOVER_MINUTES}],
+        # Combo de 2 bilhetes separados: sempre carrega risco de conexão (sem
+        # proteção). Com troca de companhia o risco é maior ainda.
+        "separate_ticket": True,
+        "airline_change": airline_change,
+        "connection_risk": "alto",
+        "connection_min_recommended_minutes": SEPARATE_TICKET_MIN_LAYOVER_MINUTES,
         "booking_link": leg1.get("booking_link") or "",
         "raw_payload": {
             "combined": True,

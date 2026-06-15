@@ -330,5 +330,6 @@ def _offer_to_option(offer: dict, search: MonitoredSearch) -> dict:
         "price_outbound": offer.get("price_outbound"),
         "price_return": offer.get("price_return"),
         "price_note": offer.get("price_note"),
+        "source_confidence": offer.get("source_confidence"),
     }
     return enrich_deal_with_miles(deal, search.min_mile_value or 0.035)

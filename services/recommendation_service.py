@@ -61,6 +61,22 @@ def _recommendation_score(option: dict, prefs: dict, cheapest_price: float, fast
     max_duration = prefs.get("max_duration_minutes")
     if max_duration and duration > float(max_duration):
         score += 0.3
+
+    # Confiabilidade da fonte: um preço real da Travelpayouts deve liderar sobre
+    # uma hipótese de IA não validada de valor parecido; dado de demonstração
+    # nunca encabeça a lista.
+    confidence = str(option.get("source_confidence") or "").lower()
+    if confidence == "unverified":
+        score += 0.40
+    elif confidence == "demo":
+        score += 1.0
+
+    # Risco de conexão: bilhetes separados (compra em 2 fontes, sem proteção de
+    # conexão) e trocas de companhia carregam risco real de perder o voo.
+    if option.get("separate_ticket"):
+        score += 0.30
+    if option.get("connection_risk") == "alto":
+        score += 0.30
     return score
 
 

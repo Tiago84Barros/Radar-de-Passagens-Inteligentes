@@ -95,58 +95,24 @@ def _has_real_results(results: list[dict[str, Any]]) -> bool:
 
 def search_all_providers(search_params: dict[str, Any]) -> list[dict[str, Any]]:
     """
-    Busca tarifas usando exclusivamente Travelpayouts (precos reais) e, como
-    apoio/fallback, Gemini com busca web — incluindo conexoes multi-segmento
-    pela malha aerea brasileira (quando esta nao e ja uma chamada de segmento).
+    Hierarquia de confiabilidade: a TRAVELPAYOUTS (preço real, não alucina) é a
+    fonte PRIMÁRIA. As IAs de busca web (Gemini/OpenAI) só entram como hipótese
+    quando não há preço real para a rota/data — ou quando o usuário marca
+    ``force_web_search`` — e suas cotações são sempre marcadas como NÃO
+    validadas (``source_confidence = unverified``). Inclui conexões
+    multi-segmento pela malha aérea (preços reais da Travelpayouts).
     """
     global _LAST_PROVIDER_DIAGNOSTIC
 
     # Prevent recursive multi-segment calls
     is_segment = bool(search_params.get("_is_segment"))
+    force_web = bool(search_params.get("force_web_search"))
 
     provider = TravelPayoutsProvider()
     results: list[dict[str, Any]] = []
+    _LAST_PROVIDER_DIAGNOSTIC = {"provider": "travelpayouts", "status": "real_empty", "message": ""}
 
-    # ── Gemini (provider primario) ────────────────────────────────────────────
-    # Tenta primeiro porque cobre rotas de nicho/datas distantes que a
-    # Travelpayouts frequentemente nao tem (cache vazio). O Travelpayouts entra
-    # como apoio/fallback a seguir.
-    gemini_results_primary, gemini_msg_primary = _search_gemini(search_params)
-    results.extend(gemini_results_primary)
-    if gemini_results_primary:
-        _LAST_PROVIDER_DIAGNOSTIC = {
-            "provider": "gemini_web_search",
-            "status": "real_ok",
-            "message": f"{len(gemini_results_primary)} cotacao(oes) recebidas via Gemini.",
-        }
-    elif gemini_msg_primary == "nao_configurado":
-        _LAST_PROVIDER_DIAGNOSTIC = {
-            "provider": "gemini_web_search",
-            "status": "not_configured",
-            "message": "GEMINI_API_KEY ausente; buscando via Travelpayouts.",
-        }
-    else:
-        _LAST_PROVIDER_DIAGNOSTIC = {
-            "provider": "gemini_web_search",
-            "status": "real_empty",
-            "message": gemini_msg_primary,
-        }
-
-    # ── OpenAI (segundo motor de busca web, junto do Gemini) ─────────────────
-    openai_results, openai_msg = _search_openai(search_params)
-    results.extend(openai_results)
-    if openai_results:
-        _LAST_PROVIDER_DIAGNOSTIC["openai"] = f"{len(openai_results)} cotacao(oes) via OpenAI."
-        if not gemini_results_primary:
-            _LAST_PROVIDER_DIAGNOSTIC.update(
-                provider="openai_web_search",
-                status="real_ok",
-                message=f"{len(openai_results)} cotacao(oes) via OpenAI (Gemini sem resultado).",
-            )
-    elif openai_msg != "nao_configurado":
-        _LAST_PROVIDER_DIAGNOSTIC["openai"] = openai_msg
-
-    # ── Travelpayouts (apoio/fallback) ────────────────────────────────────────
+    # ── Travelpayouts (PRIMÁRIO — preço real publicado) ───────────────────────
     if provider.is_configured():
         try:
             tp_results = provider.search_flights(
@@ -159,29 +125,59 @@ def search_all_providers(search_params: dict[str, Any]) -> list[dict[str, Any]]:
             )
             results.extend(tp_results)
             if tp_results:
-                if gemini_results_primary:
-                    _LAST_PROVIDER_DIAGNOSTIC["travelpayouts_apoio"] = (
-                        f"{len(tp_results)} cotacao(oes) adicionais via Travelpayouts."
-                    )
-                else:
-                    _LAST_PROVIDER_DIAGNOSTIC = {
-                        "provider": "travelpayouts",
-                        "status": "real_ok",
-                        "message": f"{len(tp_results)} cotacao(oes) via Travelpayouts (Gemini sem resultado).",
-                    }
+                _LAST_PROVIDER_DIAGNOSTIC = {
+                    "provider": "travelpayouts",
+                    "status": "real_ok",
+                    "message": f"{len(tp_results)} cotação(ões) reais via Travelpayouts.",
+                }
+            else:
+                _LAST_PROVIDER_DIAGNOSTIC["message"] = "Travelpayouts sem cotações para esta rota/data."
         except TravelPayoutsProviderError as exc:
             message = str(exc)
             if exc.status_code:
                 message = f"{message} HTTP {exc.status_code}."
             _LAST_PROVIDER_DIAGNOSTIC["travelpayouts_erro"] = message
-            if not results:
-                results.extend(_demo_results(search_params, provider_name="travelpayouts_demo_fallback", fallback_reason=message))
-    elif not results:
-        _LAST_PROVIDER_DIAGNOSTIC = {
-            "provider": "demo",
-            "status": "demo_no_token",
-            "message": "Gemini e Travelpayouts sem resultado/configuracao; modo demonstracao.",
-        }
+    else:
+        _LAST_PROVIDER_DIAGNOSTIC["message"] = "TRAVELPAYOUTS_TOKEN ausente."
+
+    has_real = _has_real_results(results)
+
+    # ── IA (Gemini/OpenAI) — só hipótese, marcada NÃO validada ────────────────
+    # Roda quando não há preço real (cobre rotas de nicho/datas distantes que a
+    # Travelpayouts não tem) ou quando o usuário força a busca web.
+    if force_web or not has_real:
+        gemini_results, gemini_msg = _search_gemini(search_params)
+        results.extend(gemini_results)
+        if gemini_results:
+            _LAST_PROVIDER_DIAGNOSTIC["gemini"] = f"{len(gemini_results)} hipótese(s) via Gemini (não validadas)."
+            if not has_real:
+                _LAST_PROVIDER_DIAGNOSTIC.update(
+                    provider="gemini_web_search",
+                    status="real_ok",
+                    message=f"{len(gemini_results)} hipótese(s) via Gemini — sem preço real para a rota.",
+                )
+        elif gemini_msg != "nao_configurado":
+            _LAST_PROVIDER_DIAGNOSTIC["gemini"] = gemini_msg
+
+        openai_results, openai_msg = _search_openai(search_params)
+        results.extend(openai_results)
+        if openai_results:
+            _LAST_PROVIDER_DIAGNOSTIC["openai"] = f"{len(openai_results)} hipótese(s) via OpenAI (não validadas)."
+        elif openai_msg != "nao_configurado":
+            _LAST_PROVIDER_DIAGNOSTIC["openai"] = openai_msg
+    else:
+        _LAST_PROVIDER_DIAGNOSTIC["ai_skipped"] = (
+            "IA não consultada: há preço real da Travelpayouts. Marque 'Sempre cruzar com "
+            "pesquisa web (IA)' para também buscar hipóteses."
+        )
+
+    # ── Demonstração: só quando não há absolutamente nenhuma fonte ────────────
+    if not results:
+        _LAST_PROVIDER_DIAGNOSTIC.update(
+            provider="demo",
+            status="demo_no_token",
+            message="Sem fonte real nem IA com resultado; modo demonstração.",
+        )
         results.extend(_demo_results(search_params))
 
     # ── Tolerancia de datas (controlada pelo usuario) ────────────────────────
@@ -262,7 +258,25 @@ def search_all_providers(search_params: dict[str, Any]) -> list[dict[str, Any]]:
     else:
         _LAST_PROVIDER_DIAGNOSTIC["coverage"] = "ok"
 
+    # Cada oferta sai carimbada com a confiabilidade da fonte, para o ranking e
+    # a UI tratarem preço real e hipótese de IA de formas diferentes.
+    for offer in direct_results:
+        offer["source_confidence"] = _source_confidence(offer)
+
     return direct_results
+
+
+def _source_confidence(offer: dict[str, Any]) -> str:
+    """Classifica a confiabilidade da origem do preço:
+    - "real": preço publicado (Travelpayouts e conexões montadas a partir dele);
+    - "unverified": hipótese de IA de busca web (Gemini/OpenAI) — não validada;
+    - "demo": dado ilustrativo de demonstração."""
+    src = str(offer.get("provider") or offer.get("source") or "").lower()
+    if any(m in src for m in ("demo", "mock", "fallback")):
+        return "demo"
+    if "travelpayouts" in src or "combinado" in src:
+        return "real"
+    return "unverified"
 
 
 def _search_segment(search_params: dict[str, Any]) -> list[dict[str, Any]]:

@@ -33,18 +33,14 @@ Dois modos de busca na lateral (**Tipo de busca**):
 
 ### Motores preservados (não removidos)
 
-O refactor de decisão **reaproveita** o motor de busca existente:
+O motor de busca atual:
 
-- `providers.provider_manager.search_all_providers` — busca por rota
-  (Travelpayouts + scrapers + conexões via hubs).
-- `services.opportunity_service.get_home_deals` — ranking de destinos mais
-  baratos (nacional/internacional).
-
-A camada `services.multi_destination_adapter` é um **wrapper fino** que converte
-a saída desses motores para o formato de oportunidade da nova interface e nunca
-reimplementa a lógica de providers. Há testes em
-`tests/test_multi_destination.py` garantindo que a busca por múltiplos destinos
-continua funcionando.
+- `providers.provider_manager.search_all_providers` — busca por rota com
+  hierarquia de confiabilidade: **Travelpayouts (preço real) é primário**; as
+  IAs de busca web (Gemini/OpenAI) só entram como hipótese quando não há preço
+  real, ou quando o usuário marca "Sempre cruzar com pesquisa web". Inclui
+  conexões via hubs (`services.multi_segment_search`). Cada oferta é carimbada
+  com `source_confidence` (`real` / `unverified` / `demo`).
 
 ### Serviços de decisão e milhas
 
