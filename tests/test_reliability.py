@@ -73,13 +73,31 @@ def test_ai_used_as_fallback_when_no_real_price(monkeypatch):
         "provider": "gemini_web_search", "source": "gemini_web_search",
         "origin": "BEL", "destination": "FOR", "departure_date": "2026-09-10",
         "return_date": None, "airline": "G3", "price": 1800.0, "currency": "BRL", "stops": 0,
+        "source_verified": True,
+        "source_url": "https://www.voegol.com.br/ofertas/bel-for-2026-09-10",
+        "booking_link": "https://www.voegol.com.br/ofertas/bel-for-2026-09-10",
     }]
     called = _spy_ai(monkeypatch, gemini_out=(gem, "ok"))
 
     results = pm.search_all_providers(_base_params())
 
     assert "gemini" in called  # sem preço real → IA entra
-    assert results and results[0]["source_confidence"] == "unverified"
+    assert results and results[0]["source_confidence"] == "verified"
+
+
+def test_manager_rejects_ai_fare_without_cited_source(monkeypatch):
+    monkeypatch.setattr(pm, "TravelPayoutsProvider", lambda: _FakeTP([]))
+    invented = [{
+        "provider": "openai_web_search", "source": "openai_web_search",
+        "origin": "BEL", "destination": "FOR", "departure_date": "2026-09-10",
+        "return_date": None, "airline": "G3", "price": 500.0, "currency": "BRL", "stops": 0,
+    }]
+    _spy_ai(monkeypatch, openai_out=(invented, "ok"))
+
+    results = pm.search_all_providers(_base_params())
+
+    assert results == []
+    assert pm.get_last_provider_diagnostic()["status"] == "no_confirmed_source"
 
 
 def test_ranking_prefers_real_over_unverified_at_same_price():

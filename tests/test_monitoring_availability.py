@@ -32,6 +32,7 @@ def captured(monkeypatch):
 
 
 def _offer(price: float, *, airline="G3", provider="openai_web_search"):
+    source_url = "https://www.voegol.com.br/ofertas/bel-for-2026-07-01"
     return {
         "provider": provider,
         "source": provider,
@@ -44,7 +45,12 @@ def _offer(price: float, *, airline="G3", provider="openai_web_search"):
         "currency": "BRL",
         "duration_minutes": 120,
         "stops": 0,
-        "booking_link": "https://voegol.com.br",
+        "booking_link": source_url,
+        "source_url": source_url,
+        "source_verified": "openai" in provider or "gemini" in provider,
+        "source_confidence": (
+            "verified" if ("openai" in provider or "gemini" in provider) else "real"
+        ),
     }
 
 
@@ -69,12 +75,26 @@ def _run(monkeypatch, search, offers):
 
 # ── Confiabilidade (corroboração na mesma busca, sem atraso) ───────────────────
 
-def test_lone_web_fare_alerts_immediately_marked_unconfirmed(monkeypatch, captured):
+def test_lone_cited_web_fare_is_confirmed(monkeypatch, captured):
     search = _search()
     res = _run(monkeypatch, search, [_offer(300.0, provider="openai_web_search")])
-    assert res["notified"] is True                       # alerta SAIU na hora
+    assert res["notified"] is True
     assert "busca rastreada" in captured[-1]
-    assert "Confiabilidade: a confirmar" in captured[-1]  # mas marcado "a confirmar"
+    assert "Confiabilidade: confirmada" in captured[-1]
+
+
+def test_uncited_web_fare_never_alerts(monkeypatch, captured):
+    search = _search()
+    offer = _offer(300.0, provider="openai_web_search")
+    offer["source_verified"] = False
+    offer["source_confidence"] = "unverified"
+    offer["source_url"] = ""
+    offer["booking_link"] = ""
+
+    res = _run(monkeypatch, search, [offer])
+
+    assert res["notified"] is False
+    assert captured == []
 
 
 def test_real_price_source_is_marked_confirmed(monkeypatch, captured):
@@ -95,8 +115,7 @@ def test_corroborated_web_fare_is_marked_confirmed(monkeypatch, captured):
 
 def test_fare_confidence_helper():
     best = _offer(300.0, provider="openai_web_search")
-    # solitária
-    assert monitoring_bot._fare_confidence(best, [best]) == "unconfirmed"
+    assert monitoring_bot._fare_confidence(best, [best]) == "confirmed"
     # corroborada por outra fonte
     other = _offer(310.0, provider="gemini_web_search")
     assert monitoring_bot._fare_confidence(best, [best, other]) == "confirmed"

@@ -42,8 +42,8 @@ def build_monitor_alert_message(
     airline = get_airline_name(option.get("airline") or "")
     duration = format_duration_short(option.get("duration_minutes"))
     stops = format_stops(option.get("stops"))
-    source = option.get("provider") or option.get("source") or "—"
-    link = option.get("booking_link") or option.get("link") or ""
+    source = option.get("source_name") or option.get("source") or option.get("provider") or "—"
+    link = option.get("source_url") or option.get("booking_link") or option.get("link") or ""
     reason = recommendation_reason or "Melhor tarifa encontrada dentro da janela monitorada."
 
     return_date = option.get("return_date") or search.return_date
@@ -67,7 +67,7 @@ def build_monitor_alert_message(
         f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"💡  Motivo da recomendação: {reason}\n"
         f"🔌  Fonte: {source}\n"
-        f"🔗  Link de compra: {link or '—'}\n"
+        f"🔗  Fonte da tarifa: {link or '—'}\n"
         f"⏰  Encontrado em: {_now_local_str()}"
     )
 
@@ -145,12 +145,12 @@ def build_availability_message(search: MonitoredSearch, available: bool, option:
     if available and option:
         price = float(option.get("price_brl") or option.get("price") or 0)
         price_block = _build_price_block(option, price, option.get("return_date") or search.return_date)
-        link = option.get("booking_link") or option.get("link") or ""
+        link = option.get("source_url") or option.get("booking_link") or option.get("link") or ""
         return (
             header
             + f"✅  Passagem ainda disponível\n"
             + price_block
-            + f"🔗  Link de compra: {link or '—'}\n"
+            + f"🔗  Fonte da tarifa: {link or '—'}\n"
             + f"⏰  Verificado em: {stamp}"
         )
 

@@ -13,7 +13,7 @@ import json
 import logging
 from datetime import date
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -30,38 +30,65 @@ logger = logging.getLogger(__name__)
 MIN_PLAUSIBLE_PRICE_BRL = 50.0
 MIN_PLAUSIBLE_MILES = 1000
 
-# Links sugeridos por IA só viram botões quando apontam para domínios oficiais
-# conhecidos. A oferta continua visível sem link quando o domínio não passa
-# nesta lista, evitando transformar texto gerado pelo modelo em redirecionamento
-# arbitrário.
-OFFICIAL_BOOKING_DOMAINS = {
+# Uma tarifa de IA só é aceita quando a URL específica da página aparece nas
+# citações nativas devolvidas pela ferramenta de busca e pertence a uma fonte
+# de viagem conhecida. A lista cobre companhias e comparadores; novos domínios
+# podem ser adicionados sem mudar o contrato de verificação.
+TRUSTED_FARE_DOMAINS = {
     "aa.com",
     "aeromexico.com",
     "aircanada.com",
+    "airchina.com",
     "airfrance.com",
     "aireuropa.com",
+    "alitalia.com",
     "avianca.com",
     "azul.com.br",
+    "booking.com",
     "britishairways.com",
     "copaair.com",
+    "decolar.com",
     "delta.com",
     "emirates.com",
+    "etihad.com",
+    "expedia.com",
+    "expedia.com.br",
     "flytap.com",
     "gol.com.br",
+    "google.com",
     "iberia.com",
+    "ita-airways.com",
     "jetblue.com",
+    "kayak.com",
+    "kayak.com.br",
+    "kiwi.com",
     "klm.com",
     "latam.com",
     "latamairlines.com",
     "lufthansa.com",
+    "momondo.com",
+    "momondo.com.br",
     "qatarairways.com",
+    "ryanair.com",
+    "skyscanner.com",
+    "skyscanner.com.br",
+    "smiles.com.br",
     "southwest.com",
+    "swiss.com",
+    "tapairportugal.com",
+    "trip.com",
     "turkishairlines.com",
     "united.com",
-    "tapairportugal.com",
     "voeazul.com.br",
     "voegol.com.br",
 }
+
+_GROUNDING_REDIRECT_DOMAINS = {
+    "vertexaisearch.cloud.google.com",
+}
+
+_TRACKING_QUERY_PREFIXES = ("utm_",)
+_TRACKING_QUERY_KEYS = {"gclid", "fbclid", "msclkid"}
 
 # Modelo principal e, em caso de quota esgotada (429 RESOURCE_EXHAUSTED) ou
 # modelo descontinuado (404 NOT_FOUND — ex.: gemini-2.0-flash aposentado),
@@ -116,14 +143,14 @@ SYSTEM_PROMPT = (
     "companhias encontradas (Smiles para GOL, Latam Pass para LATAM, TudoAzul "
     "para Azul, AAdvantage para American etc.). Se achar, preencha 'milhas' "
     "com programa, quantidade e taxas em BRL. Se nao achar, deixe null.\n"
-    "8. LINK: o campo 'link' deve apontar para o SITE OFICIAL DA COMPANHIA "
-    "AEREA que opera o voo (ex.: latam.com, voegol.com.br, voeazul.com.br, "
-    "aa.com, delta.com) — nunca para agencia ou intermediario. Se voce achou "
-    "o preco num agregador, inclua o agregador apenas em 'fonte' e monte o "
-    "link da companhia para a rota/data. Companhia sempre pelo NOME COMPLETO "
-    "(ex.: 'LATAM Airlines', 'GOL Linhas Aereas', 'Azul Linhas Aereas') — "
-    "nunca sigla ou codigo IATA.\n"
-    "9. Nunca invente companhia, preco, link ou fonte. Na duvida, omita o "
+    "8. FONTE OBRIGATORIA: 'source_url' deve ser a URL EXATA da pagina que voce "
+    "abriu e que mostra a tarifa informada. Pode ser Google Flights, Skyscanner, "
+    "Decolar, Kayak, site oficial da companhia ou outro site de viagens "
+    "confiavel. NUNCA monte, complete ou adivinhe uma URL e nunca troque a pagina "
+    "onde o preco foi encontrado por uma pagina generica da companhia. Pagina "
+    "inicial sem rota/data/preco nao serve. Em 'evidencia', descreva brevemente "
+    "o que a pagina mostra (rota, datas e preco), sem criar uma citacao textual.\n"
+    "9. Nunca invente companhia, preco, URL, evidencia ou fonte. Na duvida, omita o "
     "item — um array menor e correto vale mais que um array cheio de numeros "
     "chutados.\n"
     "10. ESCALA DOS NUMEROS (critico): use sempre o VALOR INTEIRO em reais, "
@@ -141,7 +168,9 @@ SYSTEM_PROMPT = (
     '"conexoes": [{"aeroporto": "GRU", "espera_minutos": 95}], '
     '"milhas": {"programa": "Latam Pass", "quantidade": 85000, '
     '"taxas_brl": 190.00}, "categoria": "mais_barata", '
-    '"link": "https://www.latam.com/...", "fonte": "google flights"}]\n'
+    '"source_url": "https://www.skyscanner.com.br/...", '
+    '"fonte": "Skyscanner", '
+    '"evidencia": "Pagina mostra GRU-LIS, 10/09 a 20/09, total R$ 3.850"}]\n'
     "Campos sem dado real: use null (preco_ida_brl, preco_volta_brl, "
     "duracao_total_minutos, milhas) ou lista vazia (conexoes). "
     "Se, depois de seguir todos os passos, voce nao achar nenhuma tarifa "
@@ -179,6 +208,9 @@ class GeminiFlightResult(BaseModel):
     conexoes: list[GeminiConnection] = Field(default_factory=list)
     milhas: GeminiMilesOffer | None = None
     categoria: str = ""
+    source_url: str = ""
+    evidencia: str = ""
+    # Compatibilidade temporaria com respostas do contrato anterior.
     link: str = ""
     fonte: str = ""
     # Compatibilidade com o formato antigo (escalas/preco_brl), caso o modelo
@@ -245,7 +277,7 @@ class GeminiSearchProvider(BaseProvider):
             flexible_month=flexible_month,
         )
 
-    def _call_gemini(self, prompt: str) -> str:
+    def _call_gemini(self, prompt: str) -> Any:
         try:
             from google import genai
             from google.genai import types
@@ -273,7 +305,7 @@ class GeminiSearchProvider(BaseProvider):
                     contents=prompt,
                     config=config,
                 )
-                return (getattr(response, "text", None) or "").strip()
+                return _extract_gemini_grounded_payload(response)
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
                 err = str(exc)
@@ -285,7 +317,12 @@ class GeminiSearchProvider(BaseProvider):
         raise last_exc or GeminiSearchProviderError("Todos os modelos Gemini falharam.")
 
     def normalize_response(self, payload: Any, **kwargs: Any) -> list[dict[str, Any]]:
-        items = _parse_json_array(payload)
+        response_text, citations = _unpack_grounded_payload(payload)
+        if not response_text or not citations:
+            logger.info("Resposta descartada: busca web sem citacoes verificaveis.")
+            return []
+
+        items = _parse_json_array(response_text)
         if items is None:
             return []
 
@@ -352,6 +389,16 @@ class GeminiSearchProvider(BaseProvider):
                 logger.info("Item descartado (rota/data divergente): %s", flight.companhia)
                 continue
 
+            reported_source_url = flight.source_url or flight.link
+            matched_source = _match_cited_source(reported_source_url, citations)
+            if not matched_source:
+                logger.info(
+                    "Item descartado (URL ausente, generica, nao confiavel ou nao citada): %s",
+                    flight.companhia,
+                )
+                continue
+            source_url = matched_source["source_url"]
+
             connections = [
                 {"airport": c.aeroporto.upper(), "wait_minutes": c.espera_minutos}
                 for c in flight.conexoes
@@ -399,11 +446,16 @@ class GeminiSearchProvider(BaseProvider):
                     "connections": connections,
                     "miles_offer": miles_offer,
                     "category": flight.categoria or None,
-                    "booking_link": _validated_booking_link(flight.link),
+                    "booking_link": source_url,
+                    "source_url": source_url,
+                    "source_name": flight.fonte or matched_source.get("title") or _source_host(source_url),
+                    "source_verified": True,
+                    "source_evidence": flight.evidencia,
                     "raw_payload": {
                         "gemini_web_search": True,
                         "fonte": flight.fonte,
-                        "link_rejected": bool(flight.link and not _validated_booking_link(flight.link)),
+                        "source_verified": True,
+                        "matched_citation_url": matched_source.get("citation_url"),
                     },
                 }
             )
@@ -497,7 +549,7 @@ def _build_user_prompt(
         "Siga a estrategia de busca obrigatoria do system prompt: varias "
         f"fontes e formulacoes; {precos_note}conexoes com aeroporto e tempo "
         "de espera; preco em milhas no programa de cada companhia quando "
-        "existir; link sempre do site oficial da companhia aerea. Devolva "
+        "existir; source_url sempre da pagina exata onde a tarifa foi encontrada. Devolva "
         "ate 10 opcoes reais distintas cobrindo as categorias mais_barata, "
         "mais_rapida e equilibrada. "
         "Retorne apenas o array JSON especificado — nada de texto fora dele."
@@ -589,8 +641,84 @@ def _matches_requested_itinerary(
     return True
 
 
-def _validated_booking_link(value: str | None) -> str:
-    """Return a safe official-airline HTTPS URL, or an empty string."""
+def _extract_gemini_grounded_payload(response: Any) -> dict[str, Any]:
+    """Return model text plus only the sources actually used as grounding."""
+    citations: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+
+    for candidate in getattr(response, "candidates", None) or []:
+        metadata = getattr(candidate, "grounding_metadata", None)
+        chunks = list(getattr(metadata, "grounding_chunks", None) or [])
+        supported_indices: set[int] = set()
+        support_ranges: dict[int, list[tuple[int | None, int | None]]] = {}
+
+        for support in getattr(metadata, "grounding_supports", None) or []:
+            segment = getattr(support, "segment", None)
+            span = (
+                getattr(segment, "start_index", None),
+                getattr(segment, "end_index", None),
+            )
+            for index in getattr(support, "grounding_chunk_indices", None) or []:
+                try:
+                    chunk_index = int(index)
+                except (TypeError, ValueError):
+                    continue
+                supported_indices.add(chunk_index)
+                support_ranges.setdefault(chunk_index, []).append(span)
+
+        for index in sorted(supported_indices):
+            if index < 0 or index >= len(chunks):
+                continue
+            web = getattr(chunks[index], "web", None)
+            url = str(getattr(web, "uri", None) or "").strip()
+            title = str(getattr(web, "title", None) or "").strip()
+            domain = str(getattr(web, "domain", None) or "").strip()
+            if not url:
+                continue
+            key = (url, title)
+            if key in seen:
+                continue
+            seen.add(key)
+            citations.append(
+                {
+                    "url": url,
+                    "title": title,
+                    "domain": domain,
+                    "support_ranges": support_ranges.get(index, []),
+                }
+            )
+
+    return {
+        "text": str(getattr(response, "text", None) or "").strip(),
+        "citations": citations,
+    }
+
+
+def _unpack_grounded_payload(payload: Any) -> tuple[str, list[dict[str, Any]]]:
+    if not isinstance(payload, dict):
+        return str(payload or "").strip(), []
+    text = str(payload.get("text") or payload.get("output_text") or "").strip()
+    citations = [
+        item
+        for item in (payload.get("citations") or [])
+        if isinstance(item, dict) and str(item.get("url") or "").strip()
+    ]
+    return text, citations
+
+
+def _source_host(value: str | None) -> str:
+    try:
+        return (urlparse(str(value or "")).hostname or "").lower().rstrip(".")
+    except ValueError:
+        return ""
+
+
+def _is_trusted_host(host: str) -> bool:
+    return any(host == domain or host.endswith(f".{domain}") for domain in TRUSTED_FARE_DOMAINS)
+
+
+def _validated_source_url(value: str | None) -> str:
+    """Return a safe, specific HTTPS fare page URL, or an empty string."""
     text = str(value or "").strip()
     if not text:
         return ""
@@ -603,6 +731,88 @@ def _validated_booking_link(value: str | None) -> str:
         return ""
     if host == "localhost" or host.replace(".", "").isdigit():
         return ""
-    if not any(host == domain or host.endswith(f".{domain}") for domain in OFFICIAL_BOOKING_DOMAINS):
+    if not _is_trusted_host(host):
+        return ""
+    if host == "google.com" or host.endswith(".google.com"):
+        if not parsed.path.startswith("/travel/flights"):
+            return ""
+    # Homepages genericas nao comprovam rota, data e preco.
+    if parsed.path in {"", "/"} and not parsed.query and not parsed.fragment:
         return ""
     return text
+
+
+def _canonical_source_url(value: str) -> str:
+    parsed = urlparse(value)
+    query = [
+        (key, val)
+        for key, val in parse_qsl(parsed.query, keep_blank_values=True)
+        if key.lower() not in _TRACKING_QUERY_KEYS
+        and not key.lower().startswith(_TRACKING_QUERY_PREFIXES)
+    ]
+    path = parsed.path.rstrip("/") or "/"
+    return urlunparse(
+        (
+            parsed.scheme.lower(),
+            (parsed.hostname or "").lower().rstrip("."),
+            path,
+            "",
+            urlencode(sorted(query)),
+            parsed.fragment,
+        )
+    )
+
+
+def _citation_label_matches_host(citation: dict[str, Any], source_host: str) -> bool:
+    labels = " ".join(
+        str(citation.get(key) or "").lower()
+        for key in ("title", "domain")
+    )
+    bare_host = source_host.removeprefix("www.")
+    return bool(bare_host and (bare_host in labels or source_host in labels))
+
+
+def _match_cited_source(
+    reported_source_url: str | None,
+    citations: list[dict[str, Any]],
+) -> dict[str, str] | None:
+    """Match a model-reported fare page to native web-search citations.
+
+    Direct citation URLs must match exactly after removing tracking parameters.
+    Gemini sometimes returns a Google redirect URI; for that documented format,
+    the trusted source host must be present in the grounding title/domain.
+    """
+    source_url = _validated_source_url(reported_source_url)
+    if not source_url:
+        return None
+
+    canonical_source = _canonical_source_url(source_url)
+    source_host = _source_host(source_url)
+    for citation in citations:
+        citation_url = str(citation.get("url") or "").strip()
+        citation_host = _source_host(citation_url)
+        if not citation_url or not citation_host:
+            continue
+        try:
+            if _canonical_source_url(citation_url) == canonical_source:
+                return {
+                    "source_url": source_url,
+                    "citation_url": citation_url,
+                    "title": str(citation.get("title") or ""),
+                }
+        except ValueError:
+            continue
+
+        if (
+            any(
+                citation_host == domain or citation_host.endswith(f".{domain}")
+                for domain in _GROUNDING_REDIRECT_DOMAINS
+            )
+            and _citation_label_matches_host(citation, source_host)
+        ):
+            return {
+                "source_url": source_url,
+                "citation_url": citation_url,
+                "title": str(citation.get("title") or ""),
+            }
+    return None

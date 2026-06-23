@@ -7,7 +7,7 @@ MVP em Streamlit para rastrear passagens aéreas baratas, salvar histórico de c
 - Dashboard com buscas ativas, alertas disparados, menor preço recente e rotas monitoradas.
 - Cadastro de monitoramento com origem, destino ou `ANYWHERE`, datas, passageiros, preço máximo, moeda, bagagem e frequência.
 - Providers iniciais: Amadeus, Kiwi/Tequila e TravelPayouts.
-- Mocks automáticos quando as chaves reais não estão configuradas.
+- Sem tarifas simuladas: na ausência de fonte confirmada, a busca retorna vazia.
 - Histórico de preços por rota.
 - Comparação entre provedores.
 - Regras de preço: abaixo do limite, queda contra média, menor histórico e oportunidade rara.
@@ -37,10 +37,11 @@ O motor de busca atual:
 
 - `providers.provider_manager.search_all_providers` — busca por rota com
   hierarquia de confiabilidade: **Travelpayouts (preço real) é primário**; as
-  IAs de busca web (Gemini/OpenAI) só entram como hipótese quando não há preço
-  real, ou quando o usuário marca "Sempre cruzar com pesquisa web". Inclui
+  IAs de busca web (Gemini/OpenAI) só entram quando a URL exata da tarifa está
+  presente nas citações nativas da ferramenta de busca. Respostas sem citação,
+  com homepage genérica ou domínio não confiável são descartadas. Inclui
   conexões via hubs (`services.multi_segment_search`). Cada oferta é carimbada
-  com `source_confidence` (`real` / `unverified` / `demo`).
+  com `source_confidence` (`real` / `verified`).
 
 ### Serviços de decisão e milhas
 
@@ -59,12 +60,13 @@ O histórico continua no banco, mas saiu do protagonismo: gráficos e calendári
 ficam na aba **Histórico técnico**. Na tela inicial o histórico aparece só como
 apoio (ex.: *"18% abaixo da média recente observada pelo radar"*).
 
-### Modo demonstração
+### Fontes confirmadas
 
-Sem `TRAVELPAYOUTS_API_TOKEN` (ou quando uma rota falha), o app usa cotações de
-**demonstração** claramente marcadas, então a interface de decisão e a busca de
-múltiplos destinos funcionam mesmo sem API real. Não há API de disponibilidade
-de milhas: os valores em milhas são sempre estimados a partir do preço.
+Sem `TRAVELPAYOUTS_API_TOKEN` e sem uma página citada por Gemini/OpenAI, o app
+não mostra tarifa. O link exibido nas ofertas de busca web é a página onde o
+preço foi encontrado, como Skyscanner, Decolar, Google Flights ou o site da
+companhia. Não há API de disponibilidade de milhas: estimativas de milhas são
+identificadas separadamente e não são tratadas como disponibilidade real.
 
 ## Rodar localmente
 

@@ -11,6 +11,7 @@ Sem dependencia de SDK: chama a API REST direto com `requests`.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 import requests
 
@@ -49,7 +50,7 @@ class OpenAISearchProvider(GeminiSearchProvider):
         return bool(getattr(self.settings, "openai_api_key", None))
 
     # Sobrescreve a chamada de API; search_flights/normalize_response herdados.
-    def _call_gemini(self, prompt: str) -> str:  # noqa: D102 - nome herdado do fluxo base
+    def _call_gemini(self, prompt: str) -> Any:  # noqa: D102 - nome herdado do fluxo base
         headers = {
             "Authorization": f"Bearer {self.settings.openai_api_key}",
             "Content-Type": "application/json",
@@ -61,7 +62,8 @@ class OpenAISearchProvider(GeminiSearchProvider):
                 "model": model,
                 "instructions": SYSTEM_PROMPT,
                 "input": prompt,
-                "tools": [{"type": "web_search"}],
+                "tools": [{"type": "web_search", "search_context_size": "high"}],
+                "tool_choice": "required",
                 "temperature": 0,
             }
             try:
@@ -79,7 +81,7 @@ class OpenAISearchProvider(GeminiSearchProvider):
                     last_err = OpenAISearchProviderError(f"HTTP 400: {resp.text[:300]}")
                     continue
                 resp.raise_for_status()
-                return _extract_output_text(resp.json())
+                return _extract_grounded_output(resp.json())
             except OpenAISearchProviderError:
                 raise
             except requests.RequestException as exc:
@@ -106,3 +108,42 @@ def _extract_output_text(data: dict) -> str:
                 if value:
                     parts.append(value)
     return "\n".join(parts).strip()
+
+
+def _extract_grounded_output(data: dict) -> dict[str, Any]:
+    """Extract text and the native URL citations attached to that text."""
+    citations: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+
+    for item in data.get("output") or []:
+        if item.get("type") != "message":
+            continue
+        for content in item.get("content") or []:
+            for annotation in content.get("annotations") or []:
+                if not isinstance(annotation, dict):
+                    continue
+                nested = annotation.get("url_citation")
+                citation = nested if isinstance(nested, dict) else annotation
+                if annotation.get("type") != "url_citation" and not isinstance(nested, dict):
+                    continue
+                url = str(citation.get("url") or "").strip()
+                title = str(citation.get("title") or "").strip()
+                if not url:
+                    continue
+                key = (url, title)
+                if key in seen:
+                    continue
+                seen.add(key)
+                citations.append(
+                    {
+                        "url": url,
+                        "title": title,
+                        "start_index": citation.get("start_index"),
+                        "end_index": citation.get("end_index"),
+                    }
+                )
+
+    return {
+        "text": _extract_output_text(data),
+        "citations": citations,
+    }

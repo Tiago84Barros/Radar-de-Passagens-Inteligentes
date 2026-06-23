@@ -110,6 +110,9 @@ def _offer_to_option(offer: dict, min_mile_value: float) -> dict:
         "price_brl": float(offer.get("price") or 0),
         "airline": offer.get("airline") or "",
         "provider": offer.get("provider") or offer.get("source") or "",
+        "source": offer.get("source") or offer.get("provider") or "",
+        "source_name": offer.get("source_name") or "",
+        "source_url": offer.get("source_url") or "",
         "stops": offer.get("stops"),
         "duration_minutes": offer.get("duration_minutes"),
         "departure_date": offer.get("departure_date"),
@@ -121,7 +124,7 @@ def _offer_to_option(offer: dict, min_mile_value: float) -> dict:
         "destination_iata": offer.get("destination") or "",
         "score": int(offer.get("score") or 0),
         "price_note": offer.get("price_note"),
-        # Campos ricos vindos da busca Gemini (podem ser None nos demais providers)
+        # Campos ricos vindos das buscas web (podem ser None nos demais providers)
         "price_outbound": offer.get("price_outbound"),
         "price_return": offer.get("price_return"),
         "connections": offer.get("connections") or [],
@@ -269,7 +272,11 @@ def _synthesize_packages(
         duration = (dur_ida + dur_volta) if (dur_ida and dur_volta) else None
         # Confiabilidade do pacote = a pior dos dois trechos.
         _confs = {str(ida.get("source_confidence") or ""), str(volta.get("source_confidence") or "")}
-        pkg_conf = "demo" if "demo" in _confs else ("unverified" if "unverified" in _confs else "real")
+        pkg_conf = (
+            "demo"
+            if "demo" in _confs
+            else ("unverified" if "unverified" in _confs else ("verified" if "verified" in _confs else "real"))
+        )
         deal = {
             "price_brl": total,
             "price_outbound": p_ida,
@@ -380,7 +387,9 @@ def _render_result_card(option: dict, min_mile_value: float) -> None:
     dates = _html.escape(dates)
     duration = _html.escape(format_duration_short(option.get("duration_minutes")) or "—")
     price_label = _html.escape(format_brl(price))
-    provider = _html.escape(option.get("provider") or "—")
+    provider = _html.escape(
+        option.get("source_name") or option.get("source") or option.get("provider") or "—"
+    )
     link = option.get("booking_link") or ""
 
     # ── Categoria (mais barata / mais rápida / equilibrada) ──────────────────
@@ -466,9 +475,14 @@ def _render_result_card(option: dict, min_mile_value: float) -> None:
             )
         action_html = "".join(actions)
     elif link:
+        action_label = (
+            "Ver fonte confirmada"
+            if str(option.get("source_confidence") or "").lower() == "verified"
+            else "Comprar na companhia"
+        )
         action_html = (
             f'<a class="result-card-cta" href="{_html.escape(link, quote=True)}" '
-            f'target="_blank" rel="noopener noreferrer">Comprar na companhia</a>'
+            f'target="_blank" rel="noopener noreferrer">{action_label}</a>'
         )
     else:
         action_html = '<span class="result-card-cta result-card-cta-disabled">Sem link direto</span>'
@@ -481,7 +495,12 @@ def _render_result_card(option: dict, min_mile_value: float) -> None:
 
     # Selo de confiabilidade da fonte do preço.
     confidence = str(option.get("source_confidence") or "").lower()
-    if confidence == "unverified":
+    if confidence == "verified":
+        price_note_html += (
+            '<div class="result-card-price-note">✅ Tarifa vinculada à página citada '
+            'pela busca web. Confira a disponibilidade ao abrir a fonte.</div>'
+        )
+    elif confidence == "unverified":
         price_note_html += (
             '<div class="result-card-price-note">⚠️ Preço informado por IA (busca web) — '
             'NÃO validado. Confirme no site da companhia antes de comprar.</div>'
@@ -788,14 +807,6 @@ def _render_search_tab() -> None:
             st.caption(f"🔎 Diagnóstico: {coverage_note}")
         return
 
-    # Pacotes montados derivam dos trechos — não contam para decidir "modo demo".
-    _real_results = [r for r in results if r.get("source") != "montado_ida_volta"]
-    _all_demo = bool(_real_results) and all(
-        "demo" in str(r.get("provider") or r.get("source") or "").lower() for r in _real_results
-    )
-    if _all_demo:
-        st.info("⚠️ Modo demonstração — Travelpayouts não retornou tarifas reais para esta rota/data. Os valores exibidos são estimativas ilustrativas, não preços reais.")
-
     if form.get("return_date"):
         # Ida e volta: trechos buscados separadamente — opções de ida em cima,
         # opções de volta embaixo, cada bloco com sua própria ordenação.
@@ -946,7 +957,10 @@ def _render_settings_tab() -> None:
         st.markdown(f"{'✅' if ok else '⚠️'} **{label}** — {'configurado' if ok else 'não configurado'}")
 
     st.markdown("---")
-    st.info("🛰️ Scraping desativado. O app usa Travelpayouts como fonte primária e IA apenas como hipótese sinalizada.")
+    st.info(
+        "🛰️ O app só exibe tarifas publicadas pela Travelpayouts ou vinculadas "
+        "às citações nativas das buscas web do Gemini/OpenAI. Sem fonte, não há resultado."
+    )
     st.caption(f"Banco: {diag['driver']} · host {diag['host']} · fonte: {diag['source']}")
 
 

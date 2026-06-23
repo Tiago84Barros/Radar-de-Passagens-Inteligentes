@@ -1,8 +1,30 @@
 import json
+from types import SimpleNamespace
 
 import pytest
 
-from providers.gemini_search_provider import GeminiSearchProvider
+from providers.gemini_search_provider import GeminiSearchProvider, _extract_gemini_grounded_payload
+
+
+SOURCE_URL = "https://www.skyscanner.com.br/transport/flights/gru/lis/260910/"
+
+
+def _grounded(payload, source_url=SOURCE_URL, *, citation_url=None, title="Skyscanner"):
+    text = payload
+    try:
+        items = json.loads(payload)
+    except (TypeError, ValueError):
+        items = None
+    if isinstance(items, list):
+        for item in items:
+            if isinstance(item, dict):
+                item.setdefault("source_url", source_url)
+                item.setdefault("fonte", title)
+        text = json.dumps(items)
+    return {
+        "text": text,
+        "citations": [{"url": citation_url or source_url, "title": title}],
+    }
 
 
 @pytest.fixture
@@ -48,7 +70,7 @@ def test_is_configured_true_with_api_key(provider):
 
 
 def test_search_flights_parses_mocked_response_and_sorts_by_price(provider, monkeypatch):
-    monkeypatch.setattr(provider, "_call_gemini", lambda prompt: VALID_JSON)
+    monkeypatch.setattr(provider, "_call_gemini", lambda prompt: _grounded(VALID_JSON))
 
     results = provider.search_flights("GRU", "LIS", "2026-09-10", "2026-09-20")
 
@@ -63,8 +85,9 @@ def test_search_flights_parses_mocked_response_and_sorts_by_price(provider, monk
 
 
 def test_search_flights_handles_markdown_fenced_json(provider, monkeypatch):
-    fenced = "```json\n" + VALID_JSON + "\n```"
-    monkeypatch.setattr(provider, "_call_gemini", lambda prompt: fenced)
+    grounded = _grounded(VALID_JSON)
+    grounded["text"] = "```json\n" + grounded["text"] + "\n```"
+    monkeypatch.setattr(provider, "_call_gemini", lambda prompt: grounded)
 
     results = provider.search_flights("GRU", "LIS", "2026-09-10", "2026-09-20")
 
@@ -82,7 +105,7 @@ def test_discards_implausible_low_prices(provider, monkeypatch):
          "preco_brl": 4200.00, "milhas": {"programa": "Latam Pass", "quantidade": 40, "taxas_brl": 180.0},
          "link": "https://example.com/b", "fonte": "y"},
     ])
-    monkeypatch.setattr(provider, "_call_gemini", lambda prompt: payload)
+    monkeypatch.setattr(provider, "_call_gemini", lambda prompt: _grounded(payload))
 
     results = provider.search_flights("BEL", "JFK", "2026-12-14")
 
@@ -117,7 +140,7 @@ def test_one_way_search_discards_round_trip_items(provider, monkeypatch):
             },
         ]
     )
-    monkeypatch.setattr(provider, "_call_gemini", lambda prompt: payload)
+    monkeypatch.setattr(provider, "_call_gemini", lambda prompt: _grounded(payload))
 
     results = provider.search_flights("GRU", "LIS", "2026-09-10")
 
@@ -143,7 +166,7 @@ def test_one_way_search_salvages_outbound_price_from_round_trip_breakdown(provid
             },
         ]
     )
-    monkeypatch.setattr(provider, "_call_gemini", lambda prompt: payload)
+    monkeypatch.setattr(provider, "_call_gemini", lambda prompt: _grounded(payload))
 
     results = provider.search_flights("GRU", "LIS", "2026-09-10")
 
@@ -168,7 +191,7 @@ def test_revalidates_salvaged_one_way_price(provider, monkeypatch):
             }
         ]
     )
-    monkeypatch.setattr(provider, "_call_gemini", lambda prompt: payload)
+    monkeypatch.setattr(provider, "_call_gemini", lambda prompt: _grounded(payload))
 
     assert provider.search_flights("GRU", "LIS", "2026-09-10") == []
 
@@ -192,12 +215,13 @@ def test_discards_route_or_date_that_does_not_match_request(provider, monkeypatc
             },
         ]
     )
-    monkeypatch.setattr(provider, "_call_gemini", lambda prompt: payload)
+    monkeypatch.setattr(provider, "_call_gemini", lambda prompt: _grounded(payload))
 
     assert provider.search_flights("GRU", "LIS", "2026-09-10") == []
 
 
-def test_only_exposes_links_from_known_official_airline_domains(provider, monkeypatch):
+def test_only_accepts_specific_trusted_urls_present_in_native_citations(provider, monkeypatch):
+    latam_url = "https://www.latamairlines.com/br/pt/oferta/gru-lis-2026-09-10"
     payload = json.dumps(
         [
             {
@@ -206,7 +230,7 @@ def test_only_exposes_links_from_known_official_airline_domains(provider, monkey
                 "destino": "LIS",
                 "data_ida": "2026-09-10",
                 "preco_brl": 1800.0,
-                "link": "https://latamairlines.com/br/pt",
+                "source_url": latam_url,
             },
             {
                 "companhia": "TAP",
@@ -214,21 +238,32 @@ def test_only_exposes_links_from_known_official_airline_domains(provider, monkey
                 "destino": "LIS",
                 "data_ida": "2026-09-10",
                 "preco_brl": 1900.0,
-                "link": "https://example.com/fake",
+                "source_url": "https://example.com/fake",
             },
         ]
     )
-    monkeypatch.setattr(provider, "_call_gemini", lambda prompt: payload)
+    monkeypatch.setattr(
+        provider,
+        "_call_gemini",
+        lambda prompt: {
+            "text": payload,
+            "citations": [
+                {"url": latam_url, "title": "LATAM"},
+                {"url": "https://example.com/fake", "title": "Example"},
+            ],
+        },
+    )
 
     results = provider.search_flights("GRU", "LIS", "2026-09-10")
 
-    assert results[0]["booking_link"].startswith("https://latamairlines.com")
-    assert results[1]["booking_link"] == ""
-    assert results[1]["raw_payload"]["link_rejected"] is True
+    assert len(results) == 1
+    assert results[0]["booking_link"] == latam_url
+    assert results[0]["source_url"] == latam_url
+    assert results[0]["source_verified"] is True
 
 
 def test_search_flights_returns_empty_list_on_invalid_json(provider, monkeypatch):
-    monkeypatch.setattr(provider, "_call_gemini", lambda prompt: "isso nao e json")
+    monkeypatch.setattr(provider, "_call_gemini", lambda prompt: _grounded("isso nao e json"))
 
     results = provider.search_flights("GRU", "LIS", "2026-09-10")
 
@@ -255,9 +290,124 @@ def test_search_flights_skips_items_failing_schema_validation(provider, monkeypa
             {"companhia": "TAP", "origem": "GRU", "destino": "LIS", "data_ida": "2026-09-10", "preco_brl": 1500.0},
         ]
     )
-    monkeypatch.setattr(provider, "_call_gemini", lambda prompt: bad_payload)
+    monkeypatch.setattr(provider, "_call_gemini", lambda prompt: _grounded(bad_payload))
 
     results = provider.search_flights("GRU", "LIS", "2026-09-10")
 
     assert len(results) == 1
     assert results[0]["airline"] == "TAP"
+
+
+def test_discards_complete_looking_fare_without_native_citations(provider, monkeypatch):
+    monkeypatch.setattr(provider, "_call_gemini", lambda prompt: {"text": VALID_JSON, "citations": []})
+
+    assert provider.search_flights("GRU", "LIS", "2026-09-10", "2026-09-20") == []
+
+
+def test_discards_source_url_not_present_in_citations(provider, monkeypatch):
+    payload = json.dumps(
+        [
+            {
+                "companhia": "LATAM",
+                "origem": "GRU",
+                "destino": "LIS",
+                "data_ida": "2026-09-10",
+                "preco_brl": 1800.0,
+                "source_url": "https://www.latamairlines.com/br/pt/oferta/gru-lis",
+            }
+        ]
+    )
+    monkeypatch.setattr(
+        provider,
+        "_call_gemini",
+        lambda prompt: {
+            "text": payload,
+            "citations": [{"url": SOURCE_URL, "title": "Skyscanner"}],
+        },
+    )
+
+    assert provider.search_flights("GRU", "LIS", "2026-09-10") == []
+
+
+def test_discards_generic_homepage_even_when_cited(provider, monkeypatch):
+    homepage = "https://www.voegol.com.br/"
+    payload = json.dumps(
+        [
+            {
+                "companhia": "GOL",
+                "origem": "GRU",
+                "destino": "LIS",
+                "data_ida": "2026-09-10",
+                "preco_brl": 1800.0,
+                "source_url": homepage,
+            }
+        ]
+    )
+    monkeypatch.setattr(
+        provider,
+        "_call_gemini",
+        lambda prompt: {"text": payload, "citations": [{"url": homepage, "title": "GOL"}]},
+    )
+
+    assert provider.search_flights("GRU", "LIS", "2026-09-10") == []
+
+
+def test_accepts_gemini_grounding_redirect_when_title_identifies_source(provider, monkeypatch):
+    payload = json.dumps(
+        [
+            {
+                "companhia": "TAP",
+                "origem": "GRU",
+                "destino": "LIS",
+                "data_ida": "2026-09-10",
+                "preco_brl": 1800.0,
+                "source_url": SOURCE_URL,
+            }
+        ]
+    )
+    redirect = "https://vertexaisearch.cloud.google.com/grounding-api-redirect/abc123"
+    monkeypatch.setattr(
+        provider,
+        "_call_gemini",
+        lambda prompt: _grounded(
+            payload,
+            citation_url=redirect,
+            title="Oferta de voo - skyscanner.com.br",
+        ),
+    )
+
+    results = provider.search_flights("GRU", "LIS", "2026-09-10")
+
+    assert len(results) == 1
+    assert results[0]["source_url"] == SOURCE_URL
+    assert results[0]["raw_payload"]["matched_citation_url"] == redirect
+
+
+def test_extracts_only_grounding_chunks_used_by_gemini_supports():
+    supported_web = SimpleNamespace(uri=SOURCE_URL, title="Skyscanner", domain="skyscanner.com.br")
+    unused_web = SimpleNamespace(
+        uri="https://www.example.com/not-used",
+        title="Unused",
+        domain="example.com",
+    )
+    metadata = SimpleNamespace(
+        grounding_chunks=[
+            SimpleNamespace(web=supported_web),
+            SimpleNamespace(web=unused_web),
+        ],
+        grounding_supports=[
+            SimpleNamespace(
+                grounding_chunk_indices=[0],
+                segment=SimpleNamespace(start_index=0, end_index=100),
+            )
+        ],
+    )
+    response = SimpleNamespace(
+        text="[]",
+        candidates=[SimpleNamespace(grounding_metadata=metadata)],
+    )
+
+    grounded = _extract_gemini_grounded_payload(response)
+
+    assert grounded["text"] == "[]"
+    assert [item["url"] for item in grounded["citations"]] == [SOURCE_URL]

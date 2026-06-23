@@ -35,12 +35,9 @@ TRACK_FALLBACK_WINDOW = timedelta(days=365)
 # ar (preço oscila alguns reais entre verificações). Acima disso, tratamos a
 # tarifa rastreada como indisponível.
 AVAILABILITY_TOLERANCE = 0.05
-# Corroboração anti-alucinação SEM atraso: o alerta sai na hora, mas a tarifa só
-# é marcada "confirmada" quando vem de uma fonte de preço real (Travelpayouts/
-# conexões) OU quando uma segunda fonte independente, na MESMA busca, traz preço
-# equivalente (dentro desta margem). Tarifa solitária de busca web sai marcada
-# "a confirmar". Assim não se perde tarifa que some rápido e o fantasma fica
-# sinalizado em vez de filtrado.
+# Uma tarifa web só chega aqui depois de ser vinculada à citação nativa do
+# Gemini/OpenAI. A margem abaixo continua útil para corroborar provedores
+# independentes e identificar a mesma oferta em verificações sucessivas.
 CORROBORATION_TOLERANCE = 0.05
 # Marcadores de fonte que NÃO são preço real (demo/mock/fallback de teste).
 _NON_REAL_SOURCE_MARKERS = ("demo", "mock", "fallback")
@@ -73,10 +70,23 @@ def _is_demo_option(option: dict) -> bool:
     return confidence == "demo" or any(marker in source for marker in _NON_REAL_SOURCE_MARKERS)
 
 
+def _is_confirmed_option(option: dict) -> bool:
+    source = _source_label(option)
+    if "gemini" in source or "openai" in source:
+        return (
+            str(option.get("source_confidence") or "").lower() == "verified"
+            and bool(option.get("source_url") or option.get("booking_link"))
+        )
+    return True
+
+
 def _fare_confidence(best: dict, options: list[dict], tolerance: float = CORROBORATION_TOLERANCE) -> str:
     """'confirmed' quando a tarifa vem de fonte de preço real OU é corroborada
     por outra fonte independente na mesma busca; senão 'unconfirmed'."""
-    if _is_real_price_source(_source_label(best)):
+    if (
+        _is_real_price_source(_source_label(best))
+        or str(best.get("source_confidence") or "").lower() == "verified"
+    ):
         return "confirmed"
     best_price = float(best.get("price_brl") or best.get("price") or 0)
     dep = str(best.get("departure_date") or "")[:10]
@@ -291,12 +301,13 @@ def execute_monitored_search(db, search: MonitoredSearch) -> dict:
         return {"ok": False, "message": search.last_status_message}
 
     all_options = [_offer_to_option(o, search) for o in offers]
-    # Dados demo mantêm a UI utilizável sem APIs, mas nunca podem orientar uma
-    # compra nem disparar uma mensagem automática.
+    # Defesa final: dados demo ou respostas de IA sem fonte confirmada nunca
+    # podem orientar uma compra nem disparar uma mensagem automática.
     options = [
         option
         for option in all_options
         if not _is_demo_option(option)
+        and _is_confirmed_option(option)
         and float(option.get("price_brl") or 0) > 0
     ]
     ranking = rank_flight_options(options, _preferences(search))
@@ -485,6 +496,8 @@ def _offer_to_option(offer: dict, search: MonitoredSearch) -> dict:
         "airline": offer.get("airline") or "",
         "provider": offer.get("provider") or offer.get("source") or "",
         "source": offer.get("source") or offer.get("provider") or "",
+        "source_name": offer.get("source_name") or "",
+        "source_url": offer.get("source_url") or "",
         "flight_number": offer.get("flight_number") or "",
         "stops": offer.get("stops"),
         "duration_minutes": offer.get("duration_minutes"),
