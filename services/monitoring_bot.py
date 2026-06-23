@@ -14,12 +14,15 @@ workflow_dispatch) through ``scripts/run_monitoring_bot.py``.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import date, datetime, timedelta, timezone
+from urllib.parse import urlsplit, urlunsplit
 
 from sqlalchemy import select
 
 from app.alerts import dispatch_availability_alert, dispatch_monitor_alert
-from app.db import MonitoredSearch, init_db, session_scope
+from app.db import MonitoredSearch, TrackedFareState, init_db, session_scope
 from providers.provider_manager import search_all_providers
 from services.decision_engine import REC_BUY, REC_MILES, build_purchase_recommendation
 from services.recommendation_service import rank_flight_options
@@ -64,6 +67,12 @@ def _is_real_price_source(source: str) -> bool:
     return "travelpayouts" in source and not any(m in source for m in _NON_REAL_SOURCE_MARKERS)
 
 
+def _is_demo_option(option: dict) -> bool:
+    confidence = str(option.get("source_confidence") or "").lower()
+    source = _source_label(option)
+    return confidence == "demo" or any(marker in source for marker in _NON_REAL_SOURCE_MARKERS)
+
+
 def _fare_confidence(best: dict, options: list[dict], tolerance: float = CORROBORATION_TOLERANCE) -> str:
     """'confirmed' quando a tarifa vem de fonte de preço real OU é corroborada
     por outra fonte independente na mesma busca; senão 'unconfirmed'."""
@@ -75,10 +84,141 @@ def _fare_confidence(best: dict, options: list[dict], tolerance: float = CORROBO
     for opt in options:
         if not opt or str(opt.get("departure_date") or "")[:10] != dep:
             continue
+        if not _same_offer_signature(best, opt):
+            continue
         if float(opt.get("price_brl") or opt.get("price") or 0) <= best_price * (1 + tolerance):
             sources.add(_source_label(opt))
     sources.discard("")
     return "confirmed" if len(sources) >= 2 else "unconfirmed"
+
+
+def _normalized_booking_target(value: str | None) -> str:
+    """Stable URL identity without volatile query parameters/fragments."""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        parsed = urlsplit(text)
+    except ValueError:
+        return ""
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return ""
+    return urlunsplit((parsed.scheme.lower(), parsed.netloc.lower(), parsed.path.rstrip("/"), "", ""))
+
+
+def _same_offer_signature(left: dict, right: dict) -> bool:
+    """Whether two providers appear to describe the same concrete itinerary."""
+    fields = (
+        "origin_iata",
+        "destination_iata",
+        "departure_date",
+        "return_date",
+        "airline",
+        "flight_number",
+        "stops",
+    )
+    for field in fields:
+        a = str(left.get(field) or "").strip().lower()
+        b = str(right.get(field) or "").strip().lower()
+        if a and b and a != b:
+            return False
+    return True
+
+
+def _fare_identity(option: dict) -> dict:
+    payload = {
+        "provider": _source_label(option),
+        "origin": str(option.get("origin_iata") or "").upper(),
+        "destination": str(option.get("destination_iata") or "").upper(),
+        "departure": str(option.get("departure_date") or "")[:10],
+        "return": str(option.get("return_date") or "")[:10],
+        "airline": str(option.get("airline") or "").strip().lower(),
+        "flight_number": str(option.get("flight_number") or "").strip().upper(),
+        "stops": option.get("stops"),
+        "duration": option.get("duration_minutes"),
+        "booking_target": _normalized_booking_target(option.get("booking_link")),
+    }
+    canonical = json.dumps(payload, sort_keys=True, ensure_ascii=True, default=str)
+    payload["fingerprint"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    payload["price"] = float(option.get("price_brl") or option.get("price") or 0)
+    payload["booking_link"] = option.get("booking_link") or ""
+    return payload
+
+
+def _save_tracked_fare(db, search: MonitoredSearch, option: dict) -> None:
+    identity = _fare_identity(option)
+    setattr(search, "_tracked_fare_identity", identity)
+    if db is None or not getattr(search, "id", None):
+        return
+    state = db.get(TrackedFareState, search.id)
+    if state is None:
+        state = TrackedFareState(search_id=search.id, fingerprint=identity["fingerprint"], price=identity["price"])
+        db.add(state)
+    state.fingerprint = identity["fingerprint"]
+    state.provider = identity["provider"] or None
+    state.airline = str(option.get("airline") or "") or None
+    state.departure_date = _as_date(option.get("departure_date"))
+    state.return_date = _as_date(option.get("return_date"))
+    state.booking_link = identity["booking_link"] or None
+    state.price = identity["price"]
+    state.updated_at = datetime.now(timezone.utc)
+
+
+def _load_tracked_fare(db, search: MonitoredSearch) -> dict | None:
+    transient = getattr(search, "_tracked_fare_identity", None)
+    if transient:
+        return transient
+    if db is not None and getattr(search, "id", None):
+        state = db.get(TrackedFareState, search.id)
+        if state:
+            return {
+                "fingerprint": state.fingerprint,
+                "provider": state.provider or "",
+                "airline": state.airline or "",
+                "departure": str(state.departure_date or "")[:10],
+                "return": str(state.return_date or "")[:10],
+                "booking_link": state.booking_link or "",
+                "price": float(state.price or 0),
+            }
+    # Compatibility for alerts created before the identity table existed.
+    if search.last_best_price and search.last_best_link:
+        return {
+            "fingerprint": "",
+            "booking_link": search.last_best_link,
+            "price": float(search.last_best_price),
+        }
+    return None
+
+
+def _clear_tracked_fare(db, search: MonitoredSearch) -> None:
+    if hasattr(search, "_tracked_fare_identity"):
+        delattr(search, "_tracked_fare_identity")
+    if db is not None and getattr(search, "id", None):
+        state = db.get(TrackedFareState, search.id)
+        if state:
+            db.delete(state)
+
+
+def _find_tracked_option(tracked: dict, options: list[dict]) -> dict | None:
+    for option in options:
+        identity = _fare_identity(option)
+        if tracked.get("fingerprint") and identity["fingerprint"] == tracked["fingerprint"]:
+            return option
+        tracked_target = _normalized_booking_target(tracked.get("booking_link"))
+        if tracked_target and identity["booking_target"] == tracked_target:
+            return option
+    return None
+
+
+def _as_date(value) -> date | None:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except (TypeError, ValueError):
+        return None
 
 
 def is_due(search: MonitoredSearch, now: datetime | None = None) -> bool:
@@ -133,6 +273,8 @@ def query_from_monitor(search: MonitoredSearch) -> dict:
         "passengers": search.adults,
         "currency": "BRL",
         "max_price": search.max_price,
+        "date_flex_days": max(int(search.search_window_days or 0), 0),
+        "max_connection_hubs": 4,
     }
 
 
@@ -148,7 +290,15 @@ def execute_monitored_search(db, search: MonitoredSearch) -> dict:
         search.last_status_message = f"Erro na busca: {exc}"[:500]
         return {"ok": False, "message": search.last_status_message}
 
-    options = [_offer_to_option(o, search) for o in offers]
+    all_options = [_offer_to_option(o, search) for o in offers]
+    # Dados demo mantêm a UI utilizável sem APIs, mas nunca podem orientar uma
+    # compra nem disparar uma mensagem automática.
+    options = [
+        option
+        for option in all_options
+        if not _is_demo_option(option)
+        and float(option.get("price_brl") or 0) > 0
+    ]
     ranking = rank_flight_options(options, _preferences(search))
     best = ranking.get("recommended_option") or ranking.get("cheapest_option")
 
@@ -158,7 +308,8 @@ def execute_monitored_search(db, search: MonitoredSearch) -> dict:
 
     # Só faz sentido reportar "ainda disponível"/"não está mais disponível"
     # quando já avisamos uma passagem antes (há uma tarifa rastreada).
-    tracking_a_fare = bool(search.last_notification_at and search.last_best_price)
+    tracked_fare = _load_tracked_fare(db, search)
+    tracking_a_fare = bool(search.last_notification_at and search.last_best_price and tracked_fare)
 
     is_alert_candidate = False
     if best:
@@ -194,25 +345,41 @@ def execute_monitored_search(db, search: MonitoredSearch) -> dict:
                 # que o último avisado" — por isso só muda ao alertar.
                 search.last_best_price = best_price
                 search.last_best_link = best.get("booking_link")
+                _save_tracked_fare(db, search, best)
 
-    # ── Sem alerta novo: reportar se a passagem rastreada ainda existe ─────────
+    # ── Sem alerta novo: reportar se a mesma tarifa rastreada ainda existe ─────
     if not notified and tracking_a_fare:
-        still_available = bool(best) and best["price_brl"] <= search.last_best_price * (1 + AVAILABILITY_TOLERANCE)
-        if still_available:
-            # Enquanto continuar disponível, avisa a cada verificação.
-            status = dispatch_availability_alert(search, available=True, option=best)
+        tracked_option = _find_tracked_option(tracked_fare, options)
+        still_available = bool(
+            tracked_option
+            and tracked_option["price_brl"] <= search.last_best_price * (1 + AVAILABILITY_TOLERANCE)
+        )
+        if still_available and tracked_option:
+            status = dispatch_availability_alert(search, available=True, option=tracked_option)
             availability_sent = status == "sent"
-            status_message = "Passagem ainda disponível."
-        elif not _already_announced_unavailable(search):
-            # Sumiu — avisa UMA única vez e volta a aguardar a próxima oportunidade.
-            # O "uma vez" é derivado do last_status_message (sem coluna extra).
+            status_message = (
+                "Passagem ainda disponível."
+                if availability_sent
+                else f"Passagem localizada, mas o aviso falhou: {status}"
+            )
+        elif options and not _already_announced_unavailable(search):
+            # Há mercado observado, mas a tarifa anunciada não apareceu. Só
+            # abandona o estado depois que o aviso realmente chega ao usuário.
             status = dispatch_availability_alert(search, available=False)
             availability_sent = status == "sent"
-            status_message = UNAVAILABLE_STATUS_MESSAGE
-            # Reancora o rastreio: zera o histórico para que a próxima boa tarifa
-            # gere um alerta novo, mesmo custando mais que a passagem que sumiu.
-            search.last_best_price = None
-            search.last_notification_at = None
+            if availability_sent:
+                status_message = UNAVAILABLE_STATUS_MESSAGE
+                search.last_best_price = None
+                search.last_best_link = None
+                search.last_notification_at = None
+                _clear_tracked_fare(db, search)
+            else:
+                status_message = f"Tarifa não localizada; falha ao avisar indisponibilidade: {status}"
+        elif not options:
+            # Falha de cobertura não é prova de indisponibilidade.
+            status_message = "Não foi possível reconfirmar a tarifa nesta verificação; rastreio preservado."
+    elif not options and all_options:
+        status_message = "Somente dados de demonstração foram encontrados; nenhum alerta foi enviado."
 
     search.last_checked_at = datetime.now(timezone.utc)
     search.updated_at = search.last_checked_at
@@ -317,6 +484,8 @@ def _offer_to_option(offer: dict, search: MonitoredSearch) -> dict:
         "price_brl": float(offer.get("price") or 0),
         "airline": offer.get("airline") or "",
         "provider": offer.get("provider") or offer.get("source") or "",
+        "source": offer.get("source") or offer.get("provider") or "",
+        "flight_number": offer.get("flight_number") or "",
         "stops": offer.get("stops"),
         "duration_minutes": offer.get("duration_minutes"),
         "departure_date": offer.get("departure_date") or search.departure_date,
@@ -330,6 +499,9 @@ def _offer_to_option(offer: dict, search: MonitoredSearch) -> dict:
         "price_outbound": offer.get("price_outbound"),
         "price_return": offer.get("price_return"),
         "price_note": offer.get("price_note"),
+        "miles_offer": offer.get("miles_offer"),
+        "miles_required": (offer.get("miles_offer") or {}).get("amount"),
+        "taxes": (offer.get("miles_offer") or {}).get("taxes_brl"),
         "source_confidence": offer.get("source_confidence"),
     }
     return enrich_deal_with_miles(deal, search.min_mile_value or 0.035)

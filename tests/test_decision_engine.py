@@ -67,6 +67,16 @@ def test_real_award_makes_miles_worth_it():
     assert rec["should_alert"] is True
 
 
+def test_estimated_miles_never_trigger_miles_recommendation():
+    rec = build_purchase_recommendation(
+        [_quote(1200, score=80, estimated_miles=20000)],
+        {"max_price": 1300, "consider_miles": True, "user_min_mile_value": 0.035},
+    )
+
+    assert rec["recommendation"] != REC_MILES
+    assert rec["best_miles_option"]["miles_estimated"] is True
+
+
 def test_confidence_within_bounds():
     rec = build_purchase_recommendation([_quote(500)], {"max_price": 1000})
     assert 5 <= rec["confidence"] <= 99

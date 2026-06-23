@@ -19,12 +19,14 @@ same logic works for both live API and demo/fallback modes.
 """
 
 from datetime import date as _date
+from datetime import datetime as _datetime
+from datetime import timedelta as _timedelta
+from datetime import timezone as _timezone
 from typing import Any, Callable
 
 from services.air_network import find_candidate_hubs, hub_route_label, is_domestic
 
 # Minimum layover time at the connection hub (minutes)
-LAYOVER_MINUTES = 90
 # Conexão entre BILHETES SEPARADOS (combos montados de 2 fontes one-way) não tem
 # proteção: se o 1º voo atrasa, o 2º é perdido sem reacomodação. Recomenda-se
 # uma folga grande — sobretudo com troca de companhia (precisa retirar bagagem,
@@ -96,23 +98,27 @@ def search_via_connections(
         if not leg2_results:
             continue
 
-        # As duas pernas precisam ser viaveis como UMA viagem: a perna 2 parte
-        # no mesmo dia da perna 1 (ou no dia seguinte, conexao noturna).
-        # Sem esse pareamento, o merge juntava a perna 1 mais barata de um dia
-        # com a perna 2 mais barata de outro dia qualquer.
-        best_pair: tuple[dict[str, Any], dict[str, Any]] | None = None
+        # Bilhetes separados só são recomendáveis quando há horários reais para
+        # provar uma folga de pelo menos 6h. Datas sem hora não permitem calcular
+        # conexão e são descartadas em vez de receber uma espera fictícia.
+        best_pair: tuple[dict[str, Any], dict[str, Any], int] | None = None
         best_pair_price = float("inf")
         for leg1 in leg1_results:
-            d1 = _parse_day(leg1.get("departure_date"))
-            if d1 is None:
+            departure1 = _parse_datetime(leg1.get("departure_at"))
+            duration1 = int(leg1.get("duration_minutes") or 0)
+            if departure1 is None or duration1 <= 0:
                 continue
+            arrival1 = departure1 + _timedelta(minutes=duration1)
             for leg2 in leg2_results:
-                d2 = _parse_day(leg2.get("departure_date"))
-                if d2 is None or not (0 <= (d2 - d1).days <= 1):
+                departure2 = _parse_datetime(leg2.get("departure_at"))
+                if departure2 is None:
+                    continue
+                layover_minutes = int((departure2 - arrival1).total_seconds() // 60)
+                if layover_minutes < SEPARATE_TICKET_MIN_LAYOVER_MINUTES:
                     continue
                 pair_price = float(leg1.get("price") or 0) + float(leg2.get("price") or 0)
                 if 0 < pair_price < best_pair_price:
-                    best_pair, best_pair_price = (leg1, leg2), pair_price
+                    best_pair, best_pair_price = (leg1, leg2, layover_minutes), pair_price
 
         if best_pair is None:
             continue
@@ -123,8 +129,16 @@ def search_via_connections(
 
         combined = _merge_segments(
             best_pair[0], best_pair[1], origin, destination, hub,
+            layover_minutes=best_pair[2],
             return_date=search_params.get("return_date"),
         )
+        fastest_direct = _min_duration(direct_results or [])
+        if (
+            fastest_direct
+            and combined.get("duration_minutes")
+            and combined["duration_minutes"] > fastest_direct * MAX_DURATION_RATIO
+        ):
+            continue
         combined_results.append(combined)
 
     return combined_results
@@ -138,6 +152,20 @@ def _parse_day(value) -> _date | None:
         return value
     try:
         return _date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
+
+
+def _parse_datetime(value) -> _datetime | None:
+    """Parse an ISO timestamp only when it contains an actual clock time."""
+    text = str(value or "").strip()
+    if "T" not in text and " " not in text:
+        return None
+    try:
+        parsed = _datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone(_timezone.utc).replace(tzinfo=None)
+        return parsed
     except ValueError:
         return None
 
@@ -160,6 +188,7 @@ def _merge_segments(
     origin: str,
     destination: str,
     hub: str,
+    layover_minutes: int,
     return_date=None,
 ) -> dict[str, Any]:
     """Combine two one-way legs into a single combined route dict.
@@ -173,7 +202,7 @@ def _merge_segments(
 
     dur1 = int(leg1.get("duration_minutes") or 0)
     dur2 = int(leg2.get("duration_minutes") or 0)
-    total_duration = (dur1 + LAYOVER_MINUTES + dur2) if (dur1 and dur2) else None
+    total_duration = (dur1 + layover_minutes + dur2) if (dur1 and dur2) else None
 
     # Nome completo das companhias (nunca sigla) e nome do aeroporto do hub
     from data.airlines_catalog import get_airline_name
@@ -218,7 +247,7 @@ def _merge_segments(
         "currency": leg1.get("currency", "BRL"),
         "duration_minutes": total_duration,
         "stops": 1,
-        "connections": [{"airport": hub, "wait_minutes": LAYOVER_MINUTES}],
+        "connections": [{"airport": hub, "wait_minutes": layover_minutes}],
         # Combo de 2 bilhetes separados: sempre carrega risco de conexão (sem
         # proteção). Com troca de companhia o risco é maior ainda.
         "separate_ticket": True,
@@ -254,6 +283,15 @@ def _route_touches_brazil(origin: str, destination: str) -> bool:
 def _min_price(results: list[dict[str, Any]]) -> float | None:
     prices = [float(r.get("price") or 0) for r in results if r.get("price")]
     return min(prices) if prices else None
+
+
+def _min_duration(results: list[dict[str, Any]]) -> int | None:
+    durations = [
+        int(r.get("duration_minutes") or 0)
+        for r in results
+        if int(r.get("duration_minutes") or 0) > 0
+    ]
+    return min(durations) if durations else None
 
 
 def summarize_segment_savings(

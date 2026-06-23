@@ -5,7 +5,7 @@ from typing import Optional
 
 from sqlalchemy import select
 
-from app.db import MonitoredSearch
+from app.db import MonitoredSearch, TrackedFareState
 
 # Only searches in this status are executed by the bot.
 RUNNABLE_STATUS = "active"
@@ -60,6 +60,9 @@ def create_monitored_search(db, config: dict) -> MonitoredSearch:
 def replace_monitored_search(db, existing: MonitoredSearch, config: dict) -> MonitoredSearch:
     """Replace an existing monitor for the same route with a fresh configuration —
     the 'Substituir' branch of the replace-confirmation dialog."""
+    state = db.get(TrackedFareState, existing.id)
+    if state:
+        db.delete(state)
     db.delete(existing)
     db.flush()
     return create_monitored_search(db, config)
@@ -72,6 +75,9 @@ def set_status(db, search: MonitoredSearch, status: str) -> MonitoredSearch:
 
 
 def delete_monitored_search(db, search: MonitoredSearch) -> None:
+    state = db.get(TrackedFareState, search.id)
+    if state:
+        db.delete(state)
     db.delete(search)
 
 

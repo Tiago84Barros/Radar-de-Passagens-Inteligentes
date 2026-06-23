@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from services.miles_service import DEFAULT_CENTS_PER_MILE, compare_cash_vs_miles, estimate_miles_from_cash_price
+from services.miles_service import DEFAULT_CENTS_PER_MILE, compare_cash_vs_miles
 
 
 def _price(option: dict) -> float:
@@ -34,8 +34,12 @@ def _stops(option: dict) -> int:
 
 
 def _mile_value(option: dict, min_mile_value: float) -> float:
-    miles = option.get("estimated_miles") or estimate_miles_from_cash_price(_price(option), min_mile_value)
-    cmp = compare_cash_vs_miles(_price(option), miles, option.get("taxes") or 0.0, min_mile_value)
+    miles_offer = option.get("miles_offer") or {}
+    miles = option.get("miles_required") or miles_offer.get("amount")
+    if not miles:
+        return 0.0
+    taxes = option.get("taxes") or miles_offer.get("taxes_brl") or 0.0
+    cmp = compare_cash_vs_miles(_price(option), miles, taxes, min_mile_value)
     return float(cmp.get("mile_value") or 0.0)
 
 

@@ -55,6 +55,26 @@ class MonitoredSearch(Base):
     last_status_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
 
+class TrackedFareState(Base):
+    """Identity of the concrete fare most recently announced for one monitor.
+
+    Kept in a separate table so existing ``monitored_searches`` deployments do
+    not require a fragile ALTER TABLE migration.
+    """
+
+    __tablename__ = "tracked_fare_states"
+
+    search_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    fingerprint: Mapped[str] = mapped_column(String(64), index=True)
+    provider: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    airline: Mapped[Optional[str]] = mapped_column(String(180), nullable=True)
+    departure_date: Mapped[Optional[datetime]] = mapped_column(Date, nullable=True)
+    return_date: Mapped[Optional[datetime]] = mapped_column(Date, nullable=True)
+    booking_link: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    price: Mapped[float] = mapped_column(Float)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 _ENGINE: Engine | None = None
 _SESSION_LOCAL: sessionmaker[Session] | None = None
 

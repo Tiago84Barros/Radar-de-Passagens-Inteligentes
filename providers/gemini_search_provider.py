@@ -13,6 +13,7 @@ import json
 import logging
 from datetime import date
 from typing import Any
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -28,6 +29,39 @@ logger = logging.getLogger(__name__)
 # disso, descartamos o dado em vez de exibir lixo.
 MIN_PLAUSIBLE_PRICE_BRL = 50.0
 MIN_PLAUSIBLE_MILES = 1000
+
+# Links sugeridos por IA só viram botões quando apontam para domínios oficiais
+# conhecidos. A oferta continua visível sem link quando o domínio não passa
+# nesta lista, evitando transformar texto gerado pelo modelo em redirecionamento
+# arbitrário.
+OFFICIAL_BOOKING_DOMAINS = {
+    "aa.com",
+    "aeromexico.com",
+    "aircanada.com",
+    "airfrance.com",
+    "aireuropa.com",
+    "avianca.com",
+    "azul.com.br",
+    "britishairways.com",
+    "copaair.com",
+    "delta.com",
+    "emirates.com",
+    "flytap.com",
+    "gol.com.br",
+    "iberia.com",
+    "jetblue.com",
+    "klm.com",
+    "latam.com",
+    "latamairlines.com",
+    "lufthansa.com",
+    "qatarairways.com",
+    "southwest.com",
+    "turkishairlines.com",
+    "united.com",
+    "tapairportugal.com",
+    "voeazul.com.br",
+    "voegol.com.br",
+}
 
 # Modelo principal e, em caso de quota esgotada (429 RESOURCE_EXHAUSTED) ou
 # modelo descontinuado (404 NOT_FOUND — ex.: gemini-2.0-flash aposentado),
@@ -208,6 +242,7 @@ class GeminiSearchProvider(BaseProvider):
             return_date=ret,
             currency=currency.upper(),
             limit=limit,
+            flexible_month=flexible_month,
         )
 
     def _call_gemini(self, prompt: str) -> str:
@@ -295,6 +330,28 @@ class GeminiSearchProvider(BaseProvider):
                     )
                     continue
 
+            # O valor efetivamente usado pode ter mudado para o preço apenas da
+            # ida. Revalida a escala depois dessa substituição.
+            if float(total) < MIN_PLAUSIBLE_PRICE_BRL:
+                logger.info(
+                    "Item descartado (preco efetivo implausivel R$ %.2f): %s",
+                    float(total),
+                    flight.companhia,
+                )
+                continue
+
+            if not _matches_requested_itinerary(
+                flight,
+                requested_origin=str(kwargs.get("origin") or ""),
+                requested_destination=str(kwargs.get("destination") or ""),
+                requested_departure=str(kwargs.get("departure_date") or ""),
+                requested_return=str(kwargs.get("return_date") or "") or None,
+                effective_return=data_volta,
+                flexible_month=bool(kwargs.get("flexible_month")),
+            ):
+                logger.info("Item descartado (rota/data divergente): %s", flight.companhia)
+                continue
+
             connections = [
                 {"airport": c.aeroporto.upper(), "wait_minutes": c.espera_minutos}
                 for c in flight.conexoes
@@ -342,8 +399,12 @@ class GeminiSearchProvider(BaseProvider):
                     "connections": connections,
                     "miles_offer": miles_offer,
                     "category": flight.categoria or None,
-                    "booking_link": flight.link,
-                    "raw_payload": {"gemini_web_search": True, "fonte": flight.fonte},
+                    "booking_link": _validated_booking_link(flight.link),
+                    "raw_payload": {
+                        "gemini_web_search": True,
+                        "fonte": flight.fonte,
+                        "link_rejected": bool(flight.link and not _validated_booking_link(flight.link)),
+                    },
                 }
             )
 
@@ -474,3 +535,74 @@ def _parse_json_array(payload: Any) -> list[Any] | None:
 def _date_to_day(value: date | str) -> str:
     text = value.isoformat() if hasattr(value, "isoformat") else str(value)
     return text[:10]
+
+
+def _parse_iso_day(value: str | None) -> date | None:
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except (TypeError, ValueError):
+        return None
+
+
+def _matches_requested_itinerary(
+    flight: GeminiFlightResult,
+    *,
+    requested_origin: str,
+    requested_destination: str,
+    requested_departure: str,
+    requested_return: str | None,
+    effective_return: str | None,
+    flexible_month: bool,
+) -> bool:
+    """Reject model output that does not describe the route/date requested."""
+    if flight.origem.upper() != requested_origin.upper():
+        return False
+    if flight.destino.upper() != requested_destination.upper():
+        return False
+
+    requested_dep = _parse_iso_day(requested_departure)
+    actual_dep = _parse_iso_day(flight.data_ida)
+    if requested_dep is None or actual_dep is None:
+        return False
+
+    if flexible_month:
+        if (actual_dep.year, actual_dep.month) != (requested_dep.year, requested_dep.month):
+            return False
+    elif abs((actual_dep - requested_dep).days) > 2:
+        return False
+
+    requested_ret = _parse_iso_day(requested_return)
+    actual_ret = _parse_iso_day(effective_return)
+    if requested_ret:
+        if actual_ret is None or actual_ret <= actual_dep:
+            return False
+        requested_duration = (requested_ret - requested_dep).days
+        actual_duration = (actual_ret - actual_dep).days
+        if actual_duration != requested_duration:
+            return False
+        if not flexible_month and abs((actual_ret - requested_ret).days) > 2:
+            return False
+    elif actual_ret is not None:
+        return False
+    return True
+
+
+def _validated_booking_link(value: str | None) -> str:
+    """Return a safe official-airline HTTPS URL, or an empty string."""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        parsed = urlparse(text)
+    except ValueError:
+        return ""
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if parsed.scheme != "https" or not host or parsed.username or parsed.password:
+        return ""
+    if host == "localhost" or host.replace(".", "").isdigit():
+        return ""
+    if not any(host == domain or host.endswith(f".{domain}") for domain in OFFICIAL_BOOKING_DOMAINS):
+        return ""
+    return text

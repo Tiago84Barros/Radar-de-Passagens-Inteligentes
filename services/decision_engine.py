@@ -66,11 +66,22 @@ def _miles_for(quote: dict, mile_value_brl: float) -> tuple[int, float]:
 
     Uses real award fields when present (``miles_required`` / ``taxes``);
     otherwise estimates miles from the cash price."""
-    miles = quote.get("miles_required") or quote.get("estimated_miles")
+    miles_offer = quote.get("miles_offer") or {}
+    miles = quote.get("miles_required") or miles_offer.get("amount") or quote.get("estimated_miles")
     if not miles:
         miles = estimate_miles_from_cash_price(_price(quote), mile_value_brl)
-    taxes = float(quote.get("taxes") or quote.get("award_taxes") or 0.0)
+    taxes = float(
+        quote.get("taxes")
+        or quote.get("award_taxes")
+        or miles_offer.get("taxes_brl")
+        or 0.0
+    )
     return int(miles or 0), taxes
+
+
+def _has_verified_miles(quote: dict) -> bool:
+    miles_offer = quote.get("miles_offer") or {}
+    return bool(quote.get("miles_required") or miles_offer.get("amount"))
 
 
 def build_purchase_recommendation(
@@ -197,7 +208,10 @@ def build_purchase_recommendation(
     cash_vs_miles = compare_cash_vs_miles(
         best_price, *_miles_for(best_cash, min_mile_value), min_mile_value
     )
-    miles_worth = consider_miles and cash_vs_miles["worth_miles"]
+    # Estimar milhas a partir do preço cash é útil como referência visual, mas
+    # não prova disponibilidade nem custo de emissão. Só uma oferta concreta do
+    # programa pode sustentar a recomendação "Melhor usar milhas".
+    miles_worth = consider_miles and _has_verified_miles(best_cash) and cash_vs_miles["worth_miles"]
 
     # ── Headline recommendation ───────────────────────────────────────────────
     strong_buy = (below_budget and (at_or_below_recent_min or (pct_below_avg or 0) >= 12)) or score >= 80
@@ -265,6 +279,7 @@ def _as_option(quote: dict, mile_value_brl: float, miles_cmp: dict | None = None
         "provider": quote.get("provider") or quote.get("source") or "",
         "estimated_miles": miles,
         "mile_value": cmp["mile_value"],
+        "miles_estimated": not _has_verified_miles(quote),
         "taxes": taxes,
         "stops": quote.get("stops"),
         "duration_minutes": quote.get("duration_minutes"),

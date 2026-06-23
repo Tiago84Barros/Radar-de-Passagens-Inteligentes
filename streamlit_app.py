@@ -115,6 +115,8 @@ def _offer_to_option(offer: dict, min_mile_value: float) -> dict:
         "departure_date": offer.get("departure_date"),
         "return_date": offer.get("return_date"),
         "booking_link": offer.get("booking_link") or "",
+        "outbound_booking_link": offer.get("outbound_booking_link") or "",
+        "return_booking_link": offer.get("return_booking_link") or "",
         "origin_iata": offer.get("origin") or "",
         "destination_iata": offer.get("destination") or "",
         "score": int(offer.get("score") or 0),
@@ -127,6 +129,8 @@ def _offer_to_option(offer: dict, min_mile_value: float) -> dict:
         "category": offer.get("category"),
         "source_confidence": offer.get("source_confidence"),
         "separate_ticket": offer.get("separate_ticket"),
+        "separate_round_trip": offer.get("separate_round_trip"),
+        "airline_change": offer.get("airline_change"),
         "connection_risk": offer.get("connection_risk"),
     }
     return enrich_deal_with_miles(deal, min_mile_value)
@@ -210,6 +214,22 @@ def _synthesize_packages(
     if not out or not inn:
         return []
 
+    def _day(value) -> date | None:
+        if isinstance(value, date):
+            return value
+        try:
+            return date.fromisoformat(str(value)[:10])
+        except (TypeError, ValueError):
+            return None
+
+    requested_dep = _day(form.get("departure_date"))
+    requested_ret = _day(form.get("return_date"))
+    requested_duration = (
+        (requested_ret - requested_dep).days
+        if requested_dep and requested_ret and requested_ret > requested_dep
+        else None
+    )
+
     # Pares candidatos: o mais barato geral + o mais barato de cada companhia
     # presente nos dois trechos.
     pairs: list[tuple[dict, dict]] = [(out[0], inn[0])]
@@ -229,6 +249,13 @@ def _synthesize_packages(
     packages: list[dict] = []
     seen_totals: set[tuple] = set()
     for ida, volta in pairs:
+        actual_dep = _day(ida.get("departure_date"))
+        actual_ret = _day(volta.get("departure_date"))
+        if actual_dep is None or actual_ret is None or actual_ret <= actual_dep:
+            continue
+        if requested_duration is not None and (actual_ret - actual_dep).days != requested_duration:
+            continue
+
         p_ida = float(ida.get("price_brl") or 0)
         p_volta = float(volta.get("price_brl") or 0)
         total = round(p_ida + p_volta, 2)
@@ -252,9 +279,11 @@ def _synthesize_packages(
             "source": "montado_ida_volta",
             "stops": (int(ida.get("stops") or 0) + int(volta.get("stops") or 0)),
             "duration_minutes": duration,
-            "departure_date": form.get("departure_date"),
-            "return_date": form.get("return_date"),
-            "booking_link": "",  # dois bilhetes separados — sem link único
+            "departure_date": actual_dep,
+            "return_date": actual_ret,
+            "booking_link": "",
+            "outbound_booking_link": ida.get("booking_link") or "",
+            "return_booking_link": volta.get("booking_link") or "",
             "origin_iata": form.get("origin_iata") or "",
             "destination_iata": form.get("destination_iata") or "",
             "price_note": None,  # é o total da viagem, não "somente ida"
@@ -262,6 +291,10 @@ def _synthesize_packages(
             "miles_offer": None,
             "category": "pacote_montado",
             "source_confidence": pkg_conf,
+            "separate_ticket": True,
+            "separate_round_trip": True,
+            "airline_change": not same_airline,
+            "connection_risk": "baixo",
             "score": 0,
         }
         packages.append(enrich_deal_with_miles(deal, min_mile_value))
@@ -417,7 +450,22 @@ def _render_result_card(option: dict, min_mile_value: float) -> None:
             f"≈ {format_miles(miles)} (estimativa{rt_miles_note}) · {cmp['recommendation']}"
         )
 
-    if link:
+    outbound_link = option.get("outbound_booking_link") or ""
+    return_link = option.get("return_booking_link") or ""
+    if option.get("separate_round_trip") and (outbound_link or return_link):
+        actions = []
+        if outbound_link:
+            actions.append(
+                f'<a class="result-card-cta" href="{_html.escape(outbound_link, quote=True)}" '
+                f'target="_blank" rel="noopener noreferrer">Comprar ida</a>'
+            )
+        if return_link:
+            actions.append(
+                f'<a class="result-card-cta" href="{_html.escape(return_link, quote=True)}" '
+                f'target="_blank" rel="noopener noreferrer">Comprar volta</a>'
+            )
+        action_html = "".join(actions)
+    elif link:
         action_html = (
             f'<a class="result-card-cta" href="{_html.escape(link, quote=True)}" '
             f'target="_blank" rel="noopener noreferrer">Comprar na companhia</a>'
@@ -443,13 +491,20 @@ def _render_result_card(option: dict, min_mile_value: float) -> None:
             '<div class="result-card-price-note">⚠️ Valor ilustrativo (demonstração) — não é preço real.</div>'
         )
 
-    # Aviso de risco de conexão para combos de bilhetes separados.
+    # Avisos diferentes para ida/volta em reservas independentes e para
+    # self-transfer no meio de um itinerário.
     if option.get("separate_ticket"):
-        _troca = " com troca de companhia" if option.get("airline_change") else ""
-        price_note_html += (
-            f'<div class="result-card-price-note">⚠️ 2 bilhetes separados{_troca} (sem proteção de '
-            'conexão). Deixe 6h+ entre os voos — se o 1º atrasar, o 2º é perdido.</div>'
-        )
+        if option.get("separate_round_trip"):
+            price_note_html += (
+                '<div class="result-card-price-note">⚠️ Ida e volta em duas reservas separadas. '
+                'Alterações, cancelamentos e bagagem são tratados independentemente.</div>'
+            )
+        else:
+            _troca = " com troca de companhia" if option.get("airline_change") else ""
+            price_note_html += (
+                f'<div class="result-card-price-note">⚠️ 2 bilhetes separados{_troca} (sem proteção de '
+                'conexão). Deixe 6h+ entre os voos — se o 1º atrasar, o 2º é perdido.</div>'
+            )
 
     # st.html() bypasses Streamlit's Markdown parser entirely — avoids the bug
     # where 4+ spaces of indentation or special chars in URLs (& = ? `) cause the
@@ -650,7 +705,7 @@ def _render_search_tab() -> None:
             "min_mile_value": float(min_mile_value),
             "max_stops": max_stops_value,
             "max_duration_minutes": max_duration_minutes_value,
-            "search_window_days": 1,
+            "search_window_days": int(date_flex_days),
             "telegram_enabled": True,
             "date_flex_days": int(date_flex_days),
             "max_connection_hubs": int(max_connection_hubs),
@@ -882,7 +937,7 @@ def _render_settings_tab() -> None:
     rows = [
         ("Gemini (busca web de tarifas)", bool(getattr(settings, "gemini_api_key", None))),
         ("OpenAI / ChatGPT (busca web de tarifas)", bool(getattr(settings, "openai_api_key", None))),
-        ("Travelpayouts (fallback de preços)", bool(getattr(settings, "travelpayouts_api_token", None))),
+        ("Travelpayouts (fonte primária de preços)", bool(getattr(settings, "travelpayouts_api_token", None))),
         ("Telegram", bool(settings.telegram_bot_token and settings.telegram_chat_id)),
         ("Banco de dados", diag["driver"] != "-"),
         ("GitHub Actions (executar agora)", github_trigger_configured()),
@@ -891,7 +946,7 @@ def _render_settings_tab() -> None:
         st.markdown(f"{'✅' if ok else '⚠️'} **{label}** — {'configurado' if ok else 'não configurado'}")
 
     st.markdown("---")
-    st.info("🛰️ Scraping desativado. O app usa somente APIs configuradas (Travelpayouts + Gemini).")
+    st.info("🛰️ Scraping desativado. O app usa Travelpayouts como fonte primária e IA apenas como hipótese sinalizada.")
     st.caption(f"Banco: {diag['driver']} · host {diag['host']} · fonte: {diag['source']}")
 
 

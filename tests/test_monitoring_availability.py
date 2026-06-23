@@ -131,17 +131,63 @@ def test_availability_lifecycle(monkeypatch, captured):
     assert search.last_notification_at is None  # reancorado p/ próxima oportunidade
 
 
-def test_unavailable_is_announced_only_once(monkeypatch, captured):
+def test_provider_outage_does_not_claim_unavailability(monkeypatch, captured):
     search = _search()
     _run(monkeypatch, search, [_offer(300.0)])
     assert "busca rastreada" in captured[-1]
+    count_before = len(captured)
 
-    _run(monkeypatch, search, [])  # sumiu → "não está mais disponível"
+    result = _run(monkeypatch, search, [])
+
+    assert len(captured) == count_before
+    assert "rastreio preservado" in result["message"]
+    assert search.last_best_price == 300.0
+    assert search.last_notification_at is not None
+
+
+def test_different_fare_same_price_is_not_the_tracked_fare(monkeypatch, captured):
+    search = _search()
+    _run(monkeypatch, search, [_offer(300.0, airline="G3")])
+
+    replacement = _offer(300.0, airline="LA")
+    replacement["booking_link"] = "https://latamairlines.com"
+    _run(monkeypatch, search, [replacement])
+
     assert "não está mais disponível" in captured[-1]
-    count_after_first = len(captured)
 
-    _run(monkeypatch, search, [])  # continua sem ofertas → NÃO repete
-    assert len(captured) == count_after_first
+
+def test_demo_offer_never_sends_purchase_alert(monkeypatch, captured):
+    search = _search()
+    demo = _offer(100.0, provider="travelpayouts_demo")
+    demo["source_confidence"] = "demo"
+
+    result = _run(monkeypatch, search, [demo])
+
+    assert result["notified"] is False
+    assert captured == []
+    assert "demonstração" in result["message"]
+
+
+def test_failed_unavailability_notification_preserves_tracking(monkeypatch):
+    search = _search()
+    sent: list[str] = []
+
+    def first_send(message: str):
+        sent.append(message)
+        return True, "ok"
+
+    monkeypatch.setattr(alerts, "send_telegram_message", first_send)
+    _run(monkeypatch, search, [_offer(300.0)])
+
+    monkeypatch.setattr(alerts, "send_telegram_message", lambda message: (False, "telegram_send_failed"))
+    other = _offer(500.0, airline="LA")
+    other["booking_link"] = "https://latamairlines.com"
+    result = _run(monkeypatch, search, [other])
+
+    assert result["availability_sent"] is False
+    assert search.last_best_price == 300.0
+    assert search.last_notification_at is not None
+    assert "falha ao avisar" in result["message"]
 
 
 def test_tracking_window_follows_departure_date():

@@ -85,10 +85,12 @@ def _search_openai(search_params: dict[str, Any]) -> tuple[list[dict[str, Any]],
 
 
 def _has_real_results(results: list[dict[str, Any]]) -> bool:
-    """True se ha ao menos uma cotacao de fonte real (nao demo/mock/fallback)."""
+    """True only for published Travelpayouts prices or combinations of them."""
     for r in results:
         src = str(r.get("provider") or r.get("source") or "").lower()
-        if src and not any(m in src for m in ("demo", "mock", "fallback")):
+        if any(m in src for m in ("demo", "mock", "fallback")):
+            continue
+        if "travelpayouts" in src or "combinado" in src:
             return True
     return False
 
@@ -251,9 +253,9 @@ def search_all_providers(search_params: dict[str, Any]) -> list[dict[str, Any]]:
     if not _has_real_results(direct_results):
         _LAST_PROVIDER_DIAGNOSTIC["coverage"] = "sem_cobertura_real"
         _LAST_PROVIDER_DIAGNOSTIC["coverage_note"] = (
-            "Nenhuma fonte real (Gemini/OpenAI/Travelpayouts/conexoes) tem dados para "
-            "esta rota/data. Rotas de baixo trafego ou internacionais de nicho "
-            "podem nao ter cobertura gratuita disponivel."
+            "Nenhuma fonte de preço publicado (Travelpayouts/conexões validadas) tem "
+            "dados para esta rota/data. Resultados de Gemini/OpenAI, quando presentes, "
+            "são apenas hipóteses não validadas."
         )
     else:
         _LAST_PROVIDER_DIAGNOSTIC["coverage"] = "ok"
@@ -297,8 +299,9 @@ def _search_segment(search_params: dict[str, Any]) -> list[dict[str, Any]]:
             )
         except TravelPayoutsProviderError:
             pass
-    # Demo fallback for segment
-    return _demo_results(search_params)
+    # Uma rota combinada só pode ser montada com pernas reais. Dados demo não
+    # representam voos compatíveis entre si e jamais devem virar conexão.
+    return []
 
 
 def search_year_price_calendar(search_params: dict[str, Any]) -> list[dict[str, Any]]:

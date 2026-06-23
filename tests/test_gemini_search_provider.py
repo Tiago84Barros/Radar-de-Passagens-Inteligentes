@@ -153,6 +153,80 @@ def test_one_way_search_salvages_outbound_price_from_round_trip_breakdown(provid
     assert results[0]["price_return"] is None
 
 
+def test_revalidates_salvaged_one_way_price(provider, monkeypatch):
+    payload = json.dumps(
+        [
+            {
+                "companhia": "LATAM",
+                "origem": "GRU",
+                "destino": "LIS",
+                "data_ida": "2026-09-10",
+                "data_volta": "2026-09-20",
+                "preco_total_brl": 4000.00,
+                "preco_ida_brl": 1.90,
+                "preco_volta_brl": 3998.10,
+            }
+        ]
+    )
+    monkeypatch.setattr(provider, "_call_gemini", lambda prompt: payload)
+
+    assert provider.search_flights("GRU", "LIS", "2026-09-10") == []
+
+
+def test_discards_route_or_date_that_does_not_match_request(provider, monkeypatch):
+    payload = json.dumps(
+        [
+            {
+                "companhia": "LATAM",
+                "origem": "GRU",
+                "destino": "MAD",
+                "data_ida": "2026-09-10",
+                "preco_brl": 1800.0,
+            },
+            {
+                "companhia": "TAP",
+                "origem": "GRU",
+                "destino": "LIS",
+                "data_ida": "2026-09-20",
+                "preco_brl": 1900.0,
+            },
+        ]
+    )
+    monkeypatch.setattr(provider, "_call_gemini", lambda prompt: payload)
+
+    assert provider.search_flights("GRU", "LIS", "2026-09-10") == []
+
+
+def test_only_exposes_links_from_known_official_airline_domains(provider, monkeypatch):
+    payload = json.dumps(
+        [
+            {
+                "companhia": "LATAM",
+                "origem": "GRU",
+                "destino": "LIS",
+                "data_ida": "2026-09-10",
+                "preco_brl": 1800.0,
+                "link": "https://latamairlines.com/br/pt",
+            },
+            {
+                "companhia": "TAP",
+                "origem": "GRU",
+                "destino": "LIS",
+                "data_ida": "2026-09-10",
+                "preco_brl": 1900.0,
+                "link": "https://example.com/fake",
+            },
+        ]
+    )
+    monkeypatch.setattr(provider, "_call_gemini", lambda prompt: payload)
+
+    results = provider.search_flights("GRU", "LIS", "2026-09-10")
+
+    assert results[0]["booking_link"].startswith("https://latamairlines.com")
+    assert results[1]["booking_link"] == ""
+    assert results[1]["raw_payload"]["link_rejected"] is True
+
+
 def test_search_flights_returns_empty_list_on_invalid_json(provider, monkeypatch):
     monkeypatch.setattr(provider, "_call_gemini", lambda prompt: "isso nao e json")
 
