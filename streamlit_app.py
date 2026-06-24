@@ -171,6 +171,7 @@ def _run_manual_search(form: dict) -> dict[str, list[dict]]:
                 "origin": form["destination_iata"],
                 "destination": form["origin_iata"],
                 "departure_date": form["return_date"],
+                "min_departure_date": form["departure_date"],
             }
         )
         diag_inbound = get_last_provider_diagnostic()
@@ -181,7 +182,10 @@ def _run_manual_search(form: dict) -> dict[str, list[dict]]:
         diag_packages = get_last_provider_diagnostic()
 
     outbound_opts = [_offer_to_option(o, min_mile_value) for o in outbound]
-    inbound_opts = [_offer_to_option(o, min_mile_value) for o in inbound]
+    inbound_opts = _filter_return_options(
+        [_offer_to_option(o, min_mile_value) for o in inbound],
+        form.get("departure_date"),
+    )
     package_opts = [_offer_to_option(o, min_mile_value) for o in packages]
 
     # As fontes raramente devolvem o combo ida+volta fechado. Quando não vier
@@ -196,6 +200,27 @@ def _run_manual_search(form: dict) -> dict[str, list[dict]]:
         "packages": package_opts,
         "diagnostics": {"ida": diag_outbound, "volta": diag_inbound, "pacotes": diag_packages},
     }
+
+
+def _filter_return_options(options: list[dict], outbound_date: Any) -> list[dict]:
+    outbound_day = _parse_ui_day(outbound_date)
+    if outbound_day is None:
+        return options
+    return [
+        option
+        for option in options
+        if (return_day := _parse_ui_day(option.get("departure_date"))) is not None
+        and return_day > outbound_day
+    ]
+
+
+def _parse_ui_day(value: Any) -> date | None:
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except (TypeError, ValueError):
+        return None
 
 
 def _synthesize_packages(
@@ -709,6 +734,9 @@ def _render_search_tab() -> None:
     if search_clicked:
         if not origin_res or not destination_res:
             st.error("Não foi possível identificar a origem e/ou o destino. Use o código IATA (ex.: GRU) ou o nome da cidade.")
+            return
+        if return_date and return_date <= departure_date:
+            st.error("A data de volta precisa ser depois da data de ida.")
             return
         form = {
             "origin_iata": origin_res.code,

@@ -14,12 +14,15 @@ class _FakeTP:
     def search_flights(self, **kw):
         return list(self._results)
 
+    def search_flexible_dates(self, **kw):
+        return []
 
-def _tp_offer(price=2500.0):
+
+def _tp_offer(price=2500.0, departure_date="2026-09-10", return_date=None):
     return {
         "provider": "travelpayouts", "source": "travelpayouts",
-        "origin": "BEL", "destination": "FOR", "departure_date": "2026-09-10",
-        "return_date": None, "airline": "LA", "price": price, "currency": "BRL", "stops": 0,
+        "origin": "BEL", "destination": "FOR", "departure_date": departure_date,
+        "return_date": return_date, "airline": "LA", "price": price, "currency": "BRL", "stops": 0,
     }
 
 
@@ -98,6 +101,49 @@ def test_manager_rejects_ai_fare_without_cited_source(monkeypatch):
 
     assert results == []
     assert pm.get_last_provider_diagnostic()["status"] == "no_confirmed_source"
+
+
+def test_travelpayouts_fare_outside_date_tolerance_is_rejected(monkeypatch):
+    monkeypatch.setattr(pm, "TravelPayoutsProvider", lambda: _FakeTP([
+        _tp_offer(departure_date="2026-07-15"),
+    ]))
+    called = _spy_ai(monkeypatch)
+
+    results = pm.search_all_providers(_base_params(departure_date="2026-07-31", date_flex_days=5))
+
+    assert results == []
+    assert "gemini" in called and "openai" in called
+    assert pm.get_last_provider_diagnostic()["status"] == "no_confirmed_source"
+
+
+def test_return_leg_before_outbound_date_is_rejected(monkeypatch):
+    monkeypatch.setattr(pm, "TravelPayoutsProvider", lambda: _FakeTP([
+        _tp_offer(departure_date="2026-07-15"),
+    ]))
+    _spy_ai(monkeypatch)
+
+    results = pm.search_all_providers(
+        _base_params(
+            departure_date="2026-07-31",
+            date_flex_days=15,
+            min_departure_date="2026-07-24",
+        )
+    )
+
+    assert results == []
+
+
+def test_fare_inside_date_tolerance_is_kept(monkeypatch):
+    monkeypatch.setattr(pm, "TravelPayoutsProvider", lambda: _FakeTP([
+        _tp_offer(departure_date="2026-08-03"),
+    ]))
+    called = _spy_ai(monkeypatch)
+
+    results = pm.search_all_providers(_base_params(departure_date="2026-07-31", date_flex_days=5))
+
+    assert called == []
+    assert len(results) == 1
+    assert results[0]["departure_date"] == "2026-08-03"
 
 
 def test_ranking_prefers_real_over_unverified_at_same_price():

@@ -135,6 +135,7 @@ def search_all_providers(search_params: dict[str, Any]) -> list[dict[str, Any]]:
                 currency=search_params.get("currency", "BRL"),
                 limit=search_params.get("limit", 20),
             )
+            tp_results = _filter_to_requested_dates(tp_results, search_params)
             results.extend(tp_results)
             if tp_results:
                 _LAST_PROVIDER_DIAGNOSTIC = {
@@ -159,7 +160,7 @@ def search_all_providers(search_params: dict[str, Any]) -> list[dict[str, Any]]:
     # Travelpayouts não tem) ou quando o usuário força a busca web.
     if force_web or not has_real:
         gemini_results, gemini_msg = _search_gemini(search_params)
-        gemini_results = _confirmed_web_results(gemini_results)
+        gemini_results = _filter_to_requested_dates(_confirmed_web_results(gemini_results), search_params)
         results.extend(gemini_results)
         if gemini_results:
             _LAST_PROVIDER_DIAGNOSTIC["gemini"] = (
@@ -175,7 +176,7 @@ def search_all_providers(search_params: dict[str, Any]) -> list[dict[str, Any]]:
             _LAST_PROVIDER_DIAGNOSTIC["gemini"] = gemini_msg
 
         openai_results, openai_msg = _search_openai(search_params)
-        openai_results = _confirmed_web_results(openai_results)
+        openai_results = _filter_to_requested_dates(_confirmed_web_results(openai_results), search_params)
         results.extend(openai_results)
         if openai_results:
             _LAST_PROVIDER_DIAGNOSTIC["openai"] = (
@@ -219,6 +220,7 @@ def search_all_providers(search_params: dict[str, Any]) -> list[dict[str, Any]]:
                 currency=search_params.get("currency", "BRL"),
                 limit_per_day=10,
             )
+            flex_results = _filter_to_requested_dates(flex_results, search_params)
             if flex_results:
                 results.extend(flex_results)
                 _LAST_PROVIDER_DIAGNOSTIC["date_flex"] = (
@@ -228,7 +230,7 @@ def search_all_providers(search_params: dict[str, Any]) -> list[dict[str, Any]]:
         except TravelPayoutsProviderError:
             pass
 
-    direct_results = _sort_and_dedupe(results)
+    direct_results = _sort_and_dedupe(_filter_to_requested_dates(results, search_params))
 
     # ── Multi-segment search via hubs nacionais e internacionais ─────────────
     # max_connection_hubs e controlado pelo usuario: mais hubs == mais chance
@@ -250,7 +252,7 @@ def search_all_providers(search_params: dict[str, Any]) -> list[dict[str, Any]]:
                 direct_results=direct_results,
             )
             if combined:
-                direct_results = _sort_and_dedupe(direct_results + combined)
+                direct_results = _sort_and_dedupe(_filter_to_requested_dates(direct_results + combined, search_params))
                 hub_info = ", ".join(
                     c.get("via_hub", "?") for c in combined
                 )
@@ -306,7 +308,7 @@ def _search_segment(search_params: dict[str, Any]) -> list[dict[str, Any]]:
     provider = TravelPayoutsProvider()
     if provider.is_configured():
         try:
-            return provider.search_flights(
+            segment_results = provider.search_flights(
                 origin=search_params["origin"],
                 destination=search_params["destination"],
                 departure_date=search_params["departure_date"],
@@ -314,6 +316,7 @@ def _search_segment(search_params: dict[str, Any]) -> list[dict[str, Any]]:
                 currency=search_params.get("currency", "BRL"),
                 limit=search_params.get("limit", 5),
             )
+            return _filter_to_requested_dates(segment_results, search_params)
         except TravelPayoutsProviderError:
             pass
     # Uma rota combinada só pode ser montada com pernas reais. Dados demo não
@@ -366,3 +369,52 @@ def _sort_and_dedupe(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if key not in unique:
             unique[key] = item
     return sorted(unique.values(), key=lambda q: float(q.get("price") or 0))
+
+
+def _filter_to_requested_dates(results: list[dict[str, Any]], search_params: dict[str, Any]) -> list[dict[str, Any]]:
+    """Keep only fares inside the user-approved date window.
+
+    Travelpayouts can return the cheapest cached fare for the whole month when
+    the exact day has no cache. That is useful only after this guard confirms
+    the real fare date matches the user's tolerance.
+    """
+    requested_dep = _parse_day(search_params.get("departure_date"))
+    requested_ret = _parse_day(search_params.get("return_date"))
+    min_departure = _parse_day(search_params.get("min_departure_date"))
+    flex_days = max(int(search_params.get("date_flex_days") or 0), 0)
+    flexible_month = bool(search_params.get("flexible_month")) or flex_days >= 14
+
+    filtered: list[dict[str, Any]] = []
+    for item in results:
+        dep = _parse_day(item.get("departure_date"))
+        ret = _parse_day(item.get("return_date"))
+        if dep is None:
+            continue
+        if min_departure is not None and dep <= min_departure:
+            continue
+        if requested_dep is not None and not _within_requested_window(dep, requested_dep, flex_days, flexible_month):
+            continue
+        if requested_ret is not None:
+            if ret is None or ret <= dep:
+                continue
+            if not _within_requested_window(ret, requested_ret, flex_days, flexible_month):
+                continue
+        filtered.append(item)
+    return filtered
+
+
+def _within_requested_window(actual: date, requested: date, flex_days: int, flexible_month: bool) -> bool:
+    if flexible_month and actual.year == requested.year and actual.month == requested.month:
+        return True
+    return abs((actual - requested).days) <= flex_days
+
+
+def _parse_day(value: Any) -> date | None:
+    if value is None:
+        return None
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except (TypeError, ValueError):
+        return None
