@@ -1,15 +1,16 @@
-"""Confiabilidade: Travelpayouts (preço real) é primário, IA só fallback, cada
-oferta carimbada com source_confidence e o ranking favorece preço real."""
+"""Confiabilidade: tarifas do motor principal vêm apenas de APIs configuradas."""
+
 import providers.provider_manager as pm
 from services.recommendation_service import rank_flight_options
 
 
-class _FakeTP:
-    def __init__(self, results):
+class _FakeProvider:
+    def __init__(self, results, configured=True):
         self._results = results
+        self._configured = configured
 
     def is_configured(self):
-        return True
+        return self._configured
 
     def search_flights(self, **kw):
         return list(self._results)
@@ -18,109 +19,103 @@ class _FakeTP:
         return []
 
 
-def _tp_offer(price=2500.0, departure_date="2026-09-10", return_date=None):
+def _offer(provider="travelpayouts", price=2500.0, departure_date="2026-09-10", return_date=None):
     return {
-        "provider": "travelpayouts", "source": "travelpayouts",
-        "origin": "BEL", "destination": "FOR", "departure_date": departure_date,
-        "return_date": return_date, "airline": "LA", "price": price, "currency": "BRL", "stops": 0,
+        "provider": provider,
+        "source": provider,
+        "origin": "BEL",
+        "destination": "FOR",
+        "departure_date": departure_date,
+        "return_date": return_date,
+        "airline": "LA",
+        "price": price,
+        "currency": "BRL",
+        "stops": 0,
+        "booking_link": "https://example.com/search",
     }
 
 
 def _base_params(**extra):
     p = {
-        "origin": "BEL", "destination": "FOR", "departure_date": "2026-09-10",
-        "return_date": None, "currency": "BRL", "max_connection_hubs": 0, "date_flex_days": 0,
+        "origin": "BEL",
+        "destination": "FOR",
+        "departure_date": "2026-09-10",
+        "return_date": None,
+        "currency": "BRL",
+        "max_connection_hubs": 0,
+        "date_flex_days": 0,
     }
     p.update(extra)
     return p
 
 
-def _spy_ai(monkeypatch, gemini_out=([], "nao_configurado"), openai_out=([], "nao_configurado")):
-    called = []
-
-    def fake_gemini(params):
-        called.append("gemini")
-        return gemini_out
-
-    def fake_openai(params):
-        called.append("openai")
-        return openai_out
-
-    monkeypatch.setattr(pm, "_search_gemini", fake_gemini)
-    monkeypatch.setattr(pm, "_search_openai", fake_openai)
-    return called
+def _patch_providers(monkeypatch, serpapi_results=None, tp_results=None, *, configured=True):
+    monkeypatch.setattr(
+        pm,
+        "SerpApiGoogleFlightsProvider",
+        lambda: _FakeProvider(serpapi_results or [], configured=configured),
+    )
+    monkeypatch.setattr(
+        pm,
+        "TravelPayoutsProvider",
+        lambda: _FakeProvider(tp_results or [], configured=configured),
+    )
 
 
-def test_travelpayouts_primary_skips_ai_when_real_price_exists(monkeypatch):
-    monkeypatch.setattr(pm, "TravelPayoutsProvider", lambda: _FakeTP([_tp_offer()]))
-    called = _spy_ai(monkeypatch)
-
-    results = pm.search_all_providers(_base_params())
-
-    assert called == []  # IA NÃO consultada — já há preço real
-    assert results and results[0]["source_confidence"] == "real"
-
-
-def test_force_web_search_runs_ai_even_with_real_price(monkeypatch):
-    monkeypatch.setattr(pm, "TravelPayoutsProvider", lambda: _FakeTP([_tp_offer()]))
-    called = _spy_ai(monkeypatch)
-
-    pm.search_all_providers(_base_params(force_web_search=True))
-
-    assert "gemini" in called and "openai" in called
-
-
-def test_ai_used_as_fallback_when_no_real_price(monkeypatch):
-    monkeypatch.setattr(pm, "TravelPayoutsProvider", lambda: _FakeTP([]))  # TP vazio
-    gem = [{
-        "provider": "gemini_web_search", "source": "gemini_web_search",
-        "origin": "BEL", "destination": "FOR", "departure_date": "2026-09-10",
-        "return_date": None, "airline": "G3", "price": 1800.0, "currency": "BRL", "stops": 0,
-        "source_verified": True,
-        "source_url": "https://www.voegol.com.br/ofertas/bel-for-2026-09-10",
-        "booking_link": "https://www.voegol.com.br/ofertas/bel-for-2026-09-10",
-    }]
-    called = _spy_ai(monkeypatch, gemini_out=(gem, "ok"))
+def test_serpapi_and_travelpayouts_results_are_real_sources(monkeypatch):
+    _patch_providers(
+        monkeypatch,
+        serpapi_results=[_offer("serpapi_google_flights", 1800.0)],
+        tp_results=[_offer("travelpayouts", 1900.0)],
+    )
 
     results = pm.search_all_providers(_base_params())
 
-    assert "gemini" in called  # sem preço real → IA entra
-    assert results and results[0]["source_confidence"] == "verified"
+    assert [r["provider"] for r in results] == ["serpapi_google_flights", "travelpayouts"]
+    assert all(r["source_confidence"] == "real" for r in results)
+    assert pm.get_last_provider_diagnostic()["status"] == "api_ok"
 
 
-def test_manager_rejects_ai_fare_without_cited_source(monkeypatch):
-    monkeypatch.setattr(pm, "TravelPayoutsProvider", lambda: _FakeTP([]))
-    invented = [{
-        "provider": "openai_web_search", "source": "openai_web_search",
-        "origin": "BEL", "destination": "FOR", "departure_date": "2026-09-10",
-        "return_date": None, "airline": "G3", "price": 500.0, "currency": "BRL", "stops": 0,
-    }]
-    _spy_ai(monkeypatch, openai_out=(invented, "ok"))
+def test_force_web_search_does_not_enable_llm_fallback(monkeypatch):
+    _patch_providers(monkeypatch, tp_results=[_offer("travelpayouts")])
+
+    results = pm.search_all_providers(_base_params(force_web_search=True))
+
+    assert len(results) == 1
+    assert results[0]["provider"] == "travelpayouts"
+    assert "gemini" not in pm.get_last_provider_diagnostic()
+    assert "openai" not in pm.get_last_provider_diagnostic()
+
+
+def test_no_configured_api_returns_no_fares(monkeypatch):
+    _patch_providers(monkeypatch, configured=False)
 
     results = pm.search_all_providers(_base_params())
 
     assert results == []
-    assert pm.get_last_provider_diagnostic()["status"] == "no_confirmed_source"
+    diagnostic = pm.get_last_provider_diagnostic()
+    assert diagnostic["status"] == "no_confirmed_source"
+    assert "SERPAPI_API_KEY" in diagnostic["message"]
 
 
-def test_travelpayouts_fare_outside_date_tolerance_is_rejected(monkeypatch):
-    monkeypatch.setattr(pm, "TravelPayoutsProvider", lambda: _FakeTP([
-        _tp_offer(departure_date="2026-07-15"),
-    ]))
-    called = _spy_ai(monkeypatch)
+def test_api_fare_outside_date_tolerance_is_rejected(monkeypatch):
+    _patch_providers(
+        monkeypatch,
+        serpapi_results=[_offer("serpapi_google_flights", departure_date="2026-07-15")],
+        tp_results=[],
+    )
 
     results = pm.search_all_providers(_base_params(departure_date="2026-07-31", date_flex_days=5))
 
     assert results == []
-    assert "gemini" in called and "openai" in called
     assert pm.get_last_provider_diagnostic()["status"] == "no_confirmed_source"
 
 
 def test_return_leg_before_outbound_date_is_rejected(monkeypatch):
-    monkeypatch.setattr(pm, "TravelPayoutsProvider", lambda: _FakeTP([
-        _tp_offer(departure_date="2026-07-15"),
-    ]))
-    _spy_ai(monkeypatch)
+    _patch_providers(
+        monkeypatch,
+        serpapi_results=[_offer("serpapi_google_flights", departure_date="2026-07-15")],
+    )
 
     results = pm.search_all_providers(
         _base_params(
@@ -134,28 +129,47 @@ def test_return_leg_before_outbound_date_is_rejected(monkeypatch):
 
 
 def test_fare_inside_date_tolerance_is_kept(monkeypatch):
-    monkeypatch.setattr(pm, "TravelPayoutsProvider", lambda: _FakeTP([
-        _tp_offer(departure_date="2026-08-03"),
-    ]))
-    called = _spy_ai(monkeypatch)
+    _patch_providers(
+        monkeypatch,
+        serpapi_results=[_offer("serpapi_google_flights", departure_date="2026-08-03")],
+    )
 
     results = pm.search_all_providers(_base_params(departure_date="2026-07-31", date_flex_days=5))
 
-    assert called == []
     assert len(results) == 1
     assert results[0]["departure_date"] == "2026-08-03"
+    assert results[0]["source_confidence"] == "real"
 
 
 def test_ranking_prefers_real_over_unverified_at_same_price():
-    ai = {"price_brl": 1000.0, "duration_minutes": 120, "stops": 0, "airline": "G3", "source_confidence": "unverified"}
-    real = {"price_brl": 1000.0, "duration_minutes": 120, "stops": 0, "airline": "LA", "source_confidence": "real"}
-    ranking = rank_flight_options([ai, real], {"sort_by": "recomendados"})
+    unverified = {
+        "price_brl": 1000.0,
+        "duration_minutes": 120,
+        "stops": 0,
+        "airline": "G3",
+        "source_confidence": "unverified",
+    }
+    real = {
+        "price_brl": 1000.0,
+        "duration_minutes": 120,
+        "stops": 0,
+        "airline": "LA",
+        "source_confidence": "real",
+    }
+    ranking = rank_flight_options([unverified, real], {"sort_by": "recomendados"})
     assert ranking["recommended_option"]["source_confidence"] == "real"
 
 
 def test_ranking_penalizes_separate_ticket():
     direct = {"price_brl": 1000.0, "duration_minutes": 120, "stops": 0, "airline": "LA", "source_confidence": "real"}
-    combo = {"price_brl": 1000.0, "duration_minutes": 120, "stops": 1, "airline": "LA+G3",
-             "source_confidence": "real", "separate_ticket": True, "connection_risk": "alto"}
+    combo = {
+        "price_brl": 1000.0,
+        "duration_minutes": 120,
+        "stops": 1,
+        "airline": "LA+G3",
+        "source_confidence": "real",
+        "separate_ticket": True,
+        "connection_risk": "alto",
+    }
     ranking = rank_flight_options([combo, direct], {"sort_by": "recomendados"})
     assert ranking["recommended_option"].get("separate_ticket") is not True

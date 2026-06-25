@@ -2,7 +2,7 @@
 
 Per spec, the bot does NOT feed the app's main screen with history. It only:
   1. runs each due ``monitored_searches`` row through the search providers
-     (Travelpayouts = fonte de precos reais; Gemini = apoio/fallback),
+     (SerpApi/Travelpayouts = fontes de precos via API),
   2. finds the best fare for the tracked window,
   3. sends a Telegram alert when it is worth surfacing,
   4. updates the search's status-summary fields (last_checked_at,
@@ -35,9 +35,8 @@ TRACK_FALLBACK_WINDOW = timedelta(days=365)
 # ar (preço oscila alguns reais entre verificações). Acima disso, tratamos a
 # tarifa rastreada como indisponível.
 AVAILABILITY_TOLERANCE = 0.05
-# Uma tarifa web só chega aqui depois de ser vinculada à citação nativa do
-# Gemini/OpenAI. A margem abaixo continua útil para corroborar provedores
-# independentes e identificar a mesma oferta em verificações sucessivas.
+# Margem usada para corroborar provedores independentes e identificar a mesma
+# oferta em verificacoes sucessivas.
 CORROBORATION_TOLERANCE = 0.05
 # Marcadores de fonte que NÃO são preço real (demo/mock/fallback de teste).
 _NON_REAL_SOURCE_MARKERS = ("demo", "mock", "fallback")
@@ -59,9 +58,10 @@ def _source_label(option: dict) -> str:
 
 
 def _is_real_price_source(source: str) -> bool:
-    """Travelpayouts e conexões montadas a partir dele = preço real (não alucina).
-    Busca web (gemini/openai) não entra aqui."""
-    return "travelpayouts" in source and not any(m in source for m in _NON_REAL_SOURCE_MARKERS)
+    """Fontes estruturadas de API = preco observavel (nao gerado por LLM)."""
+    return any(m in source for m in ("travelpayouts", "serpapi", "google_flights", "combinado")) and not any(
+        m in source for m in _NON_REAL_SOURCE_MARKERS
+    )
 
 
 def _is_demo_option(option: dict) -> bool:
@@ -72,12 +72,12 @@ def _is_demo_option(option: dict) -> bool:
 
 def _is_confirmed_option(option: dict) -> bool:
     source = _source_label(option)
-    if "gemini" in source or "openai" in source:
-        return (
-            str(option.get("source_confidence") or "").lower() == "verified"
-            and bool(option.get("source_url") or option.get("booking_link"))
-        )
-    return True
+    if _is_real_price_source(source):
+        return True
+    return (
+        str(option.get("source_confidence") or "").lower() == "verified"
+        and bool(option.get("source_url") or option.get("booking_link"))
+    )
 
 
 def _fare_confidence(best: dict, options: list[dict], tolerance: float = CORROBORATION_TOLERANCE) -> str:
@@ -301,8 +301,8 @@ def execute_monitored_search(db, search: MonitoredSearch) -> dict:
         return {"ok": False, "message": search.last_status_message}
 
     all_options = [_offer_to_option(o, search) for o in offers]
-    # Defesa final: dados demo ou respostas de IA sem fonte confirmada nunca
-    # podem orientar uma compra nem disparar uma mensagem automática.
+    # Defesa final: dados demo ou fontes sem confirmacao nunca podem orientar
+    # uma compra nem disparar uma mensagem automatica.
     options = [
         option
         for option in all_options
@@ -343,10 +343,9 @@ def execute_monitored_search(db, search: MonitoredSearch) -> dict:
         )
         is_alert_candidate = worth_alert and not already_notified_recently
         if is_alert_candidate:
-            # Alerta IMEDIATO (não perde tarifa que some rápido). A confiança da
-            # tarifa vai num selo: preço real ou corroborado por outra fonte na
-            # mesma busca → "confirmada"; tarifa solitária de busca web → "a
-            # confirmar". O fantasma fica sinalizado, não escondido.
+            # Alerta IMEDIATO (nao perde tarifa que some rapido). A confianca da
+            # tarifa vai num selo: API real ou corroborada por outra fonte na
+            # mesma busca -> "confirmada"; caso contrario -> "a confirmar".
             confidence = _fare_confidence(best, options)
             status = dispatch_monitor_alert(search, best, rec.get("main_reason"), confidence=confidence)
             notified = status == "sent"

@@ -6,7 +6,7 @@ MVP em Streamlit para rastrear passagens aéreas baratas, salvar histórico de c
 
 - Dashboard com buscas ativas, alertas disparados, menor preço recente e rotas monitoradas.
 - Cadastro de monitoramento com origem, destino ou `ANYWHERE`, datas, passageiros, preço máximo, moeda, bagagem e frequência.
-- Providers iniciais: Amadeus, Kiwi/Tequila e TravelPayouts.
+- Providers de busca ativa: SerpApi Google Flights e Travelpayouts.
 - Sem tarifas simuladas: na ausência de fonte confirmada, a busca retorna vazia.
 - Histórico de preços por rota.
 - Comparação entre provedores.
@@ -36,12 +36,11 @@ Dois modos de busca na lateral (**Tipo de busca**):
 O motor de busca atual:
 
 - `providers.provider_manager.search_all_providers` — busca por rota com
-  hierarquia de confiabilidade: **Travelpayouts (preço real) é primário**; as
-  IAs de busca web (Gemini/OpenAI) só entram quando a URL exata da tarifa está
-  presente nas citações nativas da ferramenta de busca. Respostas sem citação,
-  com homepage genérica ou domínio não confiável são descartadas. Inclui
-  conexões via hubs (`services.multi_segment_search`). Cada oferta é carimbada
-  com `source_confidence` (`real` / `verified`).
+  fontes estruturadas: **SerpApi Google Flights** é a API principal de
+  descoberta e **Travelpayouts** entra como fonte complementar/cache e para
+  rotas combinadas. Gemini/OpenAI não participam mais do motor de tarifas.
+  Inclui conexões via hubs (`services.multi_segment_search`). Cada oferta é
+  carimbada com `source_confidence` (`real` / `verified` / `demo`).
 
 ### Serviços de decisão e milhas
 
@@ -62,21 +61,22 @@ apoio (ex.: *"18% abaixo da média recente observada pelo radar"*).
 
 ### Fontes confirmadas
 
-Sem `TRAVELPAYOUTS_API_TOKEN` e sem uma página citada por Gemini/OpenAI, o app
-não mostra tarifa. O link exibido nas ofertas de busca web é a página onde o
-preço foi encontrado, como Skyscanner, Decolar, Google Flights ou o site da
-companhia. Não há API de disponibilidade de milhas: estimativas de milhas são
-identificadas separadamente e não são tratadas como disponibilidade real.
+Sem `SERPAPI_API_KEY` e/ou `TRAVELPAYOUTS_API_TOKEN`, o app não tem fonte
+automática para confirmar tarifas. O link exibido nas ofertas da SerpApi aponta
+para a busca correspondente no Google Flights; Travelpayouts aponta para o link
+de compra retornado pela API. Não há API de disponibilidade de milhas:
+estimativas de milhas são identificadas separadamente e não são tratadas como
+disponibilidade real.
 
 Quando a companhia exibe preços em uma página dinâmica que não é retornada pela
-API nem aparece como citação nativa das IAs, o app não transforma essa busca em
-tarifa confirmada. Nesses casos, a tela vazia mostra atalhos para abrir a mesma
-rota/data em fontes reais, começando pela Azul, sem registrar preço inventado.
+API, o app não transforma essa busca em tarifa confirmada. Nesses casos, a tela
+vazia mostra atalhos para abrir a mesma rota/data em fontes reais, começando
+pela Azul, sem registrar preço inventado.
 
 ### Captura assistida em fonte oficial
 
 A aba **Captura oficial** cobre o caso em que a tarifa existe no site da
-companhia, mas não é acessível pela API nem pelas citações nativas das IAs. O
+companhia, mas não é acessível pelas APIs configuradas. O
 fluxo seguro é:
 
 1. Abrir a fonte oficial pelo botão da aba.
@@ -128,9 +128,11 @@ Crie um projeto Supabase e copie a string de conexão PostgreSQL para:
 
 ```toml
 DATABASE_URL = "postgresql://..."
+SERPAPI_API_KEY = "..."
+TRAVELPAYOUTS_API_TOKEN = "..."
 ```
 
-Configure esse secret tanto no Streamlit Cloud quanto no GitHub Actions.
+Configure esses secrets tanto no Streamlit Cloud quanto no GitHub Actions.
 
 ## Testes
 

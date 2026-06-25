@@ -3,9 +3,8 @@
 Duas garantias verificadas aqui:
 
 1. Confiabilidade: o alerta sai NA HORA (não perde tarifa que some rápido), mas
-   leva um selo — "confirmada" quando vem de preço real ou é corroborada por
-   outra fonte na mesma busca; "a confirmar" quando é uma tarifa solitária de
-   busca web (risco de preço fantasma).
+   leva um selo — "confirmada" quando vem de API real ou é corroborada por
+   outra fonte na mesma busca; "a confirmar" quando a fonte não é validada.
 2. Disponibilidade: depois de avisada, a cada verificação o bot reconfere a
    passagem e diz se "ainda está disponível" ou "não está mais disponível".
 """
@@ -31,7 +30,7 @@ def captured(monkeypatch):
     return messages
 
 
-def _offer(price: float, *, airline="G3", provider="openai_web_search"):
+def _offer(price: float, *, airline="G3", provider="serpapi_google_flights"):
     source_url = "https://www.voegol.com.br/ofertas/bel-for-2026-07-01"
     return {
         "provider": provider,
@@ -47,9 +46,9 @@ def _offer(price: float, *, airline="G3", provider="openai_web_search"):
         "stops": 0,
         "booking_link": source_url,
         "source_url": source_url,
-        "source_verified": "openai" in provider or "gemini" in provider,
+        "source_verified": provider == "serpapi_google_flights" or "openai" in provider or "gemini" in provider,
         "source_confidence": (
-            "verified" if ("openai" in provider or "gemini" in provider) else "real"
+            "real" if provider == "serpapi_google_flights" else "verified" if ("openai" in provider or "gemini" in provider) else "real"
         ),
     }
 
@@ -75,17 +74,17 @@ def _run(monkeypatch, search, offers):
 
 # ── Confiabilidade (corroboração na mesma busca, sem atraso) ───────────────────
 
-def test_lone_cited_web_fare_is_confirmed(monkeypatch, captured):
+def test_lone_api_fare_is_confirmed(monkeypatch, captured):
     search = _search()
-    res = _run(monkeypatch, search, [_offer(300.0, provider="openai_web_search")])
+    res = _run(monkeypatch, search, [_offer(300.0, provider="serpapi_google_flights")])
     assert res["notified"] is True
     assert "busca rastreada" in captured[-1]
     assert "Confiabilidade: confirmada" in captured[-1]
 
 
-def test_uncited_web_fare_never_alerts(monkeypatch, captured):
+def test_unverified_fare_never_alerts(monkeypatch, captured):
     search = _search()
-    offer = _offer(300.0, provider="openai_web_search")
+    offer = _offer(300.0, provider="unknown_source")
     offer["source_verified"] = False
     offer["source_confidence"] = "unverified"
     offer["source_url"] = ""
@@ -103,9 +102,9 @@ def test_real_price_source_is_marked_confirmed(monkeypatch, captured):
     assert "Confiabilidade: confirmada" in captured[-1]
 
 
-def test_corroborated_web_fare_is_marked_confirmed(monkeypatch, captured):
+def test_corroborated_independent_fare_is_marked_confirmed(monkeypatch, captured):
     search = _search()
-    # Duas fontes web independentes com preço equivalente → corroborada.
+    # Duas fontes independentes com preço equivalente -> corroborada.
     _run(monkeypatch, search, [
         _offer(300.0, provider="openai_web_search"),
         _offer(305.0, provider="gemini_web_search"),
@@ -114,10 +113,10 @@ def test_corroborated_web_fare_is_marked_confirmed(monkeypatch, captured):
 
 
 def test_fare_confidence_helper():
-    best = _offer(300.0, provider="openai_web_search")
+    best = _offer(300.0, provider="serpapi_google_flights")
     assert monitoring_bot._fare_confidence(best, [best]) == "confirmed"
     # corroborada por outra fonte
-    other = _offer(310.0, provider="gemini_web_search")
+    other = _offer(310.0, provider="travelpayouts")
     assert monitoring_bot._fare_confidence(best, [best, other]) == "confirmed"
     # fonte de preço real
     real = _offer(300.0, provider="travelpayouts")

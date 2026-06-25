@@ -52,8 +52,7 @@ def main() -> None:
     print(f" DATABASE_URL ......... {db_kind}")
     print(f" TELEGRAM_BOT_TOKEN ... {_present(s.telegram_bot_token)}")
     print(f" TELEGRAM_CHAT_ID ..... {_present(s.telegram_chat_id)}")
-    print(f" GEMINI_API_KEY ....... {_present(s.gemini_api_key)}")
-    print(f" OPENAI_API_KEY ....... {_present(s.openai_api_key)}")
+    print(f" SERPAPI_API_KEY ...... {_present(s.serpapi_api_key)}")
     print(f" TRAVELPAYOUTS ........ {_present(s.travelpayouts_api_token)}")
     if not (s.telegram_bot_token and s.telegram_chat_id):
         print("\n >> Telegram NÃO configurado neste ambiente: nenhum alerta seria enviado.")

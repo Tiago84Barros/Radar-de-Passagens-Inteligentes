@@ -66,8 +66,8 @@ def _recommendation_score(option: dict, prefs: dict, cheapest_price: float, fast
     if max_duration and duration > float(max_duration):
         score += 0.3
 
-    # Confiabilidade da fonte: um preço real da Travelpayouts deve liderar sobre
-    # uma hipótese de IA não validada de valor parecido; dado de demonstração
+    # Confiabilidade da fonte: uma tarifa de API deve liderar sobre uma fonte
+    # nao validada de valor parecido; dado de demonstracao
     # nunca encabeça a lista.
     confidence = str(option.get("source_confidence") or "").lower()
     if confidence == "unverified":

@@ -156,9 +156,10 @@ def _run_manual_search(form: dict) -> dict[str, list[dict]]:
         "passengers": form.get("adults", 1),
         "currency": "BRL",
         "max_price": form.get("max_price"),
+        "max_stops": form.get("max_stops"),
+        "max_duration_minutes": form.get("max_duration_minutes"),
         "date_flex_days": form.get("date_flex_days", 0),
         "max_connection_hubs": form.get("max_connection_hubs", 4),
-        "force_web_search": form.get("force_web_search", False),
     }
     outbound = search_all_providers(params)
     diag_outbound = get_last_provider_diagnostic()
@@ -470,7 +471,8 @@ def _render_result_card(option: dict, min_mile_value: float) -> None:
         breakdown_html = ""
     breakdown_html = rt_note_html + breakdown_html
 
-    # ── Milhas: preço real do programa quando o Gemini achou; senão estimativa ─
+    # Milhas reais só entram quando um provider estruturado informar esse dado;
+    # caso contrario, o app exibe estimativa claramente identificada.
     rt_miles_note = ", ida + volta" if rt_total else ""
     miles_offer = option.get("miles_offer")
     if miles_offer and miles_offer.get("amount"):
@@ -525,13 +527,13 @@ def _render_result_card(option: dict, min_mile_value: float) -> None:
     confidence = str(option.get("source_confidence") or "").lower()
     if confidence == "verified":
         price_note_html += (
-            '<div class="result-card-price-note">✅ Tarifa vinculada à página citada '
-            'pela busca web. Confira a disponibilidade ao abrir a fonte.</div>'
+            '<div class="result-card-price-note">✅ Tarifa vinculada a uma fonte oficial/importada. '
+            'Confira a disponibilidade ao abrir a fonte.</div>'
         )
     elif confidence == "unverified":
         price_note_html += (
-            '<div class="result-card-price-note">⚠️ Preço informado por IA (busca web) — '
-            'NÃO validado. Confirme no site da companhia antes de comprar.</div>'
+            '<div class="result-card-price-note">⚠️ Fonte não validada automaticamente. '
+            'Confirme no site da companhia antes de comprar.</div>'
         )
     elif confidence == "demo":
         price_note_html += (
@@ -611,10 +613,12 @@ def _render_leg_section(
     # para diagnóstico ficar visível sem precisar abrir logs.
     if diag and len(options) <= 2:
         bits = [str(diag.get("message") or "")]
-        if diag.get("openai"):
-            bits.append(f"OpenAI: {diag['openai']}")
-        if diag.get("travelpayouts_apoio"):
-            bits.append(f"Travelpayouts: {diag['travelpayouts_apoio']}")
+        if diag.get("serpapi"):
+            bits.append(f"SerpApi: {diag['serpapi']}")
+        if diag.get("travelpayouts"):
+            bits.append(f"Travelpayouts: {diag['travelpayouts']}")
+        if diag.get("serpapi_erro"):
+            bits.append(f"SerpApi: {diag['serpapi_erro']}")
         if diag.get("travelpayouts_erro"):
             bits.append(f"Travelpayouts: {diag['travelpayouts_erro']}")
         joined = " · ".join(b for b in bits if b)
@@ -648,7 +652,7 @@ def _render_official_search_shortcuts(form: dict) -> None:
         return
     st.markdown("#### Consultar nas fontes")
     st.caption(
-        "A automacao nao confirmou preco com fonte citada. Estes botoes abrem a busca "
+        "As APIs configuradas nao confirmaram preco. Estes botoes abrem a busca "
         "nas fontes reais, sem registrar valores como tarifa encontrada."
     )
     cols = st.columns(min(len(links), 4))
@@ -737,18 +741,6 @@ def _render_search_tab() -> None:
                     "de avião no meio do caminho. 0 desativa essa busca."
                 ),
             )
-            force_web_search = st.checkbox(
-                "Sempre cruzar com pesquisa web (IA)",
-                value=False,
-                help=(
-                    "Por padrão, a pesquisa via IA (Gemini + Google Search) só "
-                    "entra como apoio quando a Travelpayouts não retorna nada. "
-                    "Ative para sempre cruzar os preços com uma pesquisa web "
-                    "extra e aumentar o alcance das fontes — a busca fica mais "
-                    "lenta, mas cobre mais lugares."
-                ),
-            )
-
         search_clicked = st.button("🔍 Buscar passagens", type="primary", use_container_width=True)
 
     if search_clicked:
@@ -776,7 +768,6 @@ def _render_search_tab() -> None:
             "telegram_enabled": True,
             "date_flex_days": int(date_flex_days),
             "max_connection_hubs": int(max_connection_hubs),
-            "force_web_search": bool(force_web_search),
         }
         st.session_state["last_search_form"] = form
         with st.spinner("Buscando as melhores tarifas..."):
@@ -813,7 +804,7 @@ def _render_search_tab() -> None:
     if error:
         _err = str(error)
         if "token" in _err.lower() or "401" in _err or "403" in _err:
-            st.error("Travelpayouts não configurado ou token inválido. Verifique o secret TRAVELPAYOUTS_API_TOKEN nas configurações do app.")
+            st.error("API de passagens não configurada ou chave inválida. Verifique os secrets SERPAPI_API_KEY e TRAVELPAYOUTS_API_TOKEN.")
         else:
             st.error(f"Não foi possível consultar a API de passagens agora. Tente novamente em alguns instantes. ({_err[:200]})")
         return
@@ -821,37 +812,13 @@ def _render_search_tab() -> None:
         diag = get_last_provider_diagnostic()
         st.warning(
             "Nenhuma tarifa foi confirmada automaticamente para esta combinação. "
-            "Isso pode acontecer quando a API não tem cache da rota/data ou quando "
-            "a companhia mostra preços em uma página dinâmica que Gemini/OpenAI "
-            "não conseguem citar com segurança."
+            "Isso pode acontecer quando as APIs configuradas não têm cobertura, "
+            "cache ou disponibilidade para a rota/data."
         )
-        if diag.get("provider") == "gemini_web_search" and diag.get("status") == "not_configured":
-            st.info(
-                "💡 A busca via IA (Gemini) está desativada neste app — ela ajuda "
-                "justamente em rotas de nicho como esta, onde a Travelpayouts "
-                "ainda não tem cache de preços. Configure o secret "
-                "`GEMINI_API_KEY` para ativar essa fonte adicional."
-            )
-        _gem_msg = str(diag.get("message") or "")
-        if "RESOURCE_EXHAUSTED" in _gem_msg or "429" in _gem_msg:
-            if "prepayment" in _gem_msg or "credits are depleted" in _gem_msg:
-                st.error(
-                    "🚫 A busca via Gemini falhou: os créditos pré-pagos do projeto "
-                    "Google AI Studio desta chave estão esgotados. Recarregue os "
-                    "créditos ou troque a `GEMINI_API_KEY` por uma chave de um "
-                    "projeto no nível gratuito em https://aistudio.google.com/apikey."
-                )
-            else:
-                st.error(
-                    "🚫 A busca via Gemini falhou: limite de uso da API atingido "
-                    "(429). Aguarde a renovação da cota ou verifique o billing do "
-                    "projeto em https://ai.studio/projects."
-                )
-        elif diag.get("status") == "real_empty" and _gem_msg.startswith("erro Gemini"):
-            st.error(f"🚫 A busca via Gemini falhou: {_gem_msg}")
-        _oai_msg = str(diag.get("openai") or "")
-        if _oai_msg.startswith("erro OpenAI"):
-            st.error(f"🚫 A busca via OpenAI falhou: {_oai_msg}")
+        if diag.get("serpapi_erro"):
+            st.error(f"🚫 SerpApi: {diag['serpapi_erro']}")
+        if diag.get("travelpayouts_erro"):
+            st.error(f"🚫 Travelpayouts: {diag['travelpayouts_erro']}")
         coverage_note = diag.get("coverage_note")
         if coverage_note:
             st.caption(f"🔎 Diagnóstico: {coverage_note}")
@@ -1068,9 +1035,8 @@ def _render_settings_tab() -> None:
     settings = get_settings()
     diag = database_diagnostics()
     rows = [
-        ("Gemini (busca web de tarifas)", bool(getattr(settings, "gemini_api_key", None))),
-        ("OpenAI / ChatGPT (busca web de tarifas)", bool(getattr(settings, "openai_api_key", None))),
-        ("Travelpayouts (fonte primária de preços)", bool(getattr(settings, "travelpayouts_api_token", None))),
+        ("SerpApi Google Flights (API principal de preços)", bool(getattr(settings, "serpapi_api_key", None))),
+        ("Travelpayouts (API complementar/cache)", bool(getattr(settings, "travelpayouts_api_token", None))),
         ("Telegram", bool(settings.telegram_bot_token and settings.telegram_chat_id)),
         ("Banco de dados", diag["driver"] != "-"),
         ("GitHub Actions (executar agora)", github_trigger_configured()),
@@ -1080,8 +1046,9 @@ def _render_settings_tab() -> None:
 
     st.markdown("---")
     st.info(
-        "🛰️ O app só exibe tarifas publicadas pela Travelpayouts ou vinculadas "
-        "às citações nativas das buscas web do Gemini/OpenAI. Sem fonte, não há resultado."
+        "🛰️ O app só exibe tarifas retornadas por APIs configuradas "
+        "(SerpApi Google Flights e/ou Travelpayouts) ou importadas manualmente de fonte oficial. "
+        "Sem fonte confirmada, não há resultado."
     )
     st.caption(f"Banco: {diag['driver']} · host {diag['host']} · fonte: {diag['source']}")
 

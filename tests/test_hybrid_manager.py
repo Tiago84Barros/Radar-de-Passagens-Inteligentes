@@ -4,6 +4,7 @@ from providers.provider_manager import get_last_provider_diagnostic, search_all_
 def test_hybrid_manager_returns_no_fares_when_no_source_is_configured(monkeypatch):
     monkeypatch.delenv("TRAVELPAYOUTS_API_TOKEN", raising=False)
     monkeypatch.delenv("TRAVELPAYOUTS_TOKEN", raising=False)
+    monkeypatch.delenv("SERPAPI_API_KEY", raising=False)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 

@@ -46,6 +46,10 @@ class Settings:
     app_password: str | None
     gemini_api_key: str | None
     openai_api_key: str | None
+    serpapi_api_key: str | None
+    serpapi_deep_search: bool
+    serpapi_no_cache: bool
+    serpapi_max_flex_days: int
     travelpayouts_token: str | None
     travelpayouts_api_token: str | None
     telegram_bot_token: str | None
@@ -65,6 +69,10 @@ class Settings:
         self.app_password = get_config_value("APP_PASSWORD")
         self.gemini_api_key = get_config_value("GEMINI_API_KEY")
         self.openai_api_key = get_config_value("OPENAI_API_KEY")
+        self.serpapi_api_key = get_config_value("SERPAPI_API_KEY")
+        self.serpapi_deep_search = _as_bool(get_config_value("SERPAPI_DEEP_SEARCH", "true"))
+        self.serpapi_no_cache = _as_bool(get_config_value("SERPAPI_NO_CACHE", "true"))
+        self.serpapi_max_flex_days = int(get_config_value("SERPAPI_MAX_FLEX_DAYS", "2") or "2")
         self.travelpayouts_api_token = get_config_value("TRAVELPAYOUTS_API_TOKEN") or get_config_value("TRAVELPAYOUTS_TOKEN")
         self.travelpayouts_token = self.travelpayouts_api_token
         self.telegram_bot_token = get_config_value("TELEGRAM_BOT_TOKEN")
