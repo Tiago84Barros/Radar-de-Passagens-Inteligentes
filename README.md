@@ -68,6 +68,11 @@ preço foi encontrado, como Skyscanner, Decolar, Google Flights ou o site da
 companhia. Não há API de disponibilidade de milhas: estimativas de milhas são
 identificadas separadamente e não são tratadas como disponibilidade real.
 
+Quando a companhia exibe preços em uma página dinâmica que não é retornada pela
+API nem aparece como citação nativa das IAs, o app não transforma essa busca em
+tarifa confirmada. Nesses casos, a tela vazia mostra atalhos para abrir a mesma
+rota/data em fontes reais, começando pela Azul, sem registrar preço inventado.
+
 ## Rodar localmente
 
 ```bash

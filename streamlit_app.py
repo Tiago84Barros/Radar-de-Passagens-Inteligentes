@@ -20,6 +20,7 @@ from services.miles_service import (
     estimate_miles_from_cash_price,
     format_miles,
 )
+from services.official_search_links import build_official_search_links
 from services.recommendation_service import rank_flight_options
 from services.github_actions_service import is_configured as github_trigger_configured
 from components.monitor_prompt import render_monitor_prompt
@@ -620,6 +621,8 @@ def _render_leg_section(
 
     if not options:
         st.info("Nenhuma tarifa encontrada para este trecho. Tente datas mais flexíveis ou remova filtros.")
+        if key in ("ida", "volta"):
+            _render_official_search_shortcuts(form)
         return
     sort_label = st.radio(
         "Ordenar por",
@@ -635,6 +638,21 @@ def _render_leg_section(
     ranking = rank_flight_options(options, prefs)
     for option in ranking["sorted_options"]:
         _render_result_card(option, form.get("min_mile_value") or DEFAULT_CENTS_PER_MILE)
+
+
+def _render_official_search_shortcuts(form: dict) -> None:
+    links = build_official_search_links(form)
+    if not links:
+        return
+    st.markdown("#### Consultar nas fontes")
+    st.caption(
+        "A automacao nao confirmou preco com fonte citada. Estes botoes abrem a busca "
+        "nas fontes reais, sem registrar valores como tarifa encontrada."
+    )
+    cols = st.columns(min(len(links), 4))
+    for index, link in enumerate(links):
+        with cols[index % len(cols)]:
+            st.link_button(link["label"], link["url"], use_container_width=True)
 
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
@@ -800,8 +818,10 @@ def _render_search_tab() -> None:
     if not results:
         diag = get_last_provider_diagnostic()
         st.warning(
-            "Nenhuma tarifa encontrada para esta combinação. "
-            "Tente datas mais flexíveis, outro aeroporto ou remova filtros."
+            "Nenhuma tarifa foi confirmada automaticamente para esta combinação. "
+            "Isso pode acontecer quando a API não tem cache da rota/data ou quando "
+            "a companhia mostra preços em uma página dinâmica que Gemini/OpenAI "
+            "não conseguem citar com segurança."
         )
         if diag.get("provider") == "gemini_web_search" and diag.get("status") == "not_configured":
             st.info(
@@ -833,6 +853,7 @@ def _render_search_tab() -> None:
         coverage_note = diag.get("coverage_note")
         if coverage_note:
             st.caption(f"🔎 Diagnóstico: {coverage_note}")
+        _render_official_search_shortcuts(form)
         return
 
     if form.get("return_date"):
