@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import date, timedelta
 from typing import Any
 
@@ -20,6 +21,7 @@ from services.miles_service import (
     estimate_miles_from_cash_price,
     format_miles,
 )
+from services.official_capture_parser import parse_azul_visible_fares
 from services.official_search_links import build_official_search_links
 from services.recommendation_service import rank_flight_options
 from services.github_actions_service import is_configured as github_trigger_configured
@@ -968,6 +970,77 @@ def _render_monitored_tab() -> None:
                     st.rerun()
 
 
+def _render_official_capture_tab() -> None:
+    st.title("Captura assistida em fontes oficiais")
+    st.caption(
+        "Modo seguro: abra a fonte oficial, copie o texto visivel da pagina de resultados "
+        "e importe apenas as tarifas que aparecem ali. Nenhum login ou senha e salvo."
+    )
+
+    col_a, col_b, col_c = st.columns(3)
+    origin = col_a.text_input("Origem IATA", value="BEL", max_chars=3).upper().strip()
+    destination = col_b.text_input("Destino IATA", value="FOR", max_chars=3).upper().strip()
+    departure_date = col_c.date_input("Data do trecho", value=date.today() + timedelta(days=30), format="DD/MM/YYYY")
+    adults = st.number_input("Passageiros", min_value=1, max_value=9, value=1, key="capture_adults")
+
+    capture_form = {
+        "origin_iata": origin,
+        "destination_iata": destination,
+        "departure_date": departure_date,
+        "return_date": None,
+        "adults": int(adults),
+    }
+    _render_official_search_shortcuts(capture_form)
+
+    default_links = build_official_search_links(capture_form)
+    default_url = next((link["url"] for link in default_links if link["label"] == "Azul"), "")
+    source_url = st.text_input("URL da pagina oficial", value=default_url)
+    pasted = st.text_area(
+        "Texto copiado da pagina de resultados da Azul",
+        height=260,
+        placeholder=(
+            "Na pagina da Azul, selecione a lista de voos, copie e cole aqui. "
+            "Ex.: horario, origem, destino, duracao e preco em R$."
+        ),
+    )
+    uploaded_json = st.file_uploader(
+        "Ou importe o JSON gerado pelo coletor local",
+        type=["json"],
+        accept_multiple_files=False,
+    )
+
+    if st.button("Importar tarifas da Azul", type="primary", use_container_width=True):
+        offers = parse_azul_visible_fares(
+            pasted,
+            origin=origin,
+            destination=destination,
+            departure_date=departure_date,
+            source_url=source_url,
+        )
+        st.session_state["official_capture_results"] = [
+            _offer_to_option(offer, DEFAULT_CENTS_PER_MILE) for offer in offers
+        ]
+    if uploaded_json is not None and st.button("Importar JSON capturado", use_container_width=True):
+        try:
+            payload = json.load(uploaded_json)
+            offers = payload.get("fares") if isinstance(payload, dict) else []
+        except (TypeError, ValueError, json.JSONDecodeError):
+            offers = []
+        st.session_state["official_capture_results"] = [
+            _offer_to_option(offer, DEFAULT_CENTS_PER_MILE) for offer in offers or []
+        ]
+
+    results = st.session_state.get("official_capture_results") or []
+    if results:
+        st.success(f"{len(results)} tarifa(s) importada(s) da fonte oficial.")
+        st.caption("Essas tarifas ficam nesta sessao e carregam o link da fonte usada na captura.")
+        ranking = rank_flight_options(results, {"sort_by": "menor_preco"})
+        for option in ranking["sorted_options"]:
+            _render_result_card(option, DEFAULT_CENTS_PER_MILE)
+    else:
+        st.info("Cole o texto visivel da pagina oficial para transformar a captura em cards no app.")
+
+
 def _render_miles_tab() -> None:
     st.title("🏆 Milhas")
     st.caption(MILES_DISCLAIMER)
@@ -1017,14 +1090,16 @@ def _render_settings_tab() -> None:
 
 def main() -> None:
     init_db()
-    tabs = st.tabs(["Buscar", "Buscas Monitoradas", "Milhas", "Configurações"])
+    tabs = st.tabs(["Buscar", "Captura oficial", "Buscas Monitoradas", "Milhas", "Configurações"])
     with tabs[0]:
         _render_search_tab()
     with tabs[1]:
-        _render_monitored_tab()
+        _render_official_capture_tab()
     with tabs[2]:
-        _render_miles_tab()
+        _render_monitored_tab()
     with tabs[3]:
+        _render_miles_tab()
+    with tabs[4]:
         _render_settings_tab()
 
 
