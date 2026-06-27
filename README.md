@@ -91,30 +91,6 @@ calculados pelo app. Valores, datas, fontes e links são renderizados diretament
 dos dados das APIs. Uma resposta inválida ou uma falha da IA aciona
 automaticamente a análise local segura.
 
-### Captura assistida em fonte oficial
-
-A aba **Captura oficial** cobre o caso em que a tarifa existe no site da
-companhia, mas não é acessível pelas APIs configuradas. O
-fluxo seguro é:
-
-1. Abrir a fonte oficial pelo botão da aba.
-2. Copiar o texto visível da lista de voos da Azul e colar no app; ou rodar o
-   coletor local opcional abaixo.
-3. O app importa somente linhas que tenham rota, duração e preço em BRL visíveis
-   no texto/JSON, sempre com o link da fonte oficial.
-
-Coletor local opcional, sem salvar senha:
-
-```bash
-pip install playwright
-playwright install chromium
-python scripts/capture_azul_assisted.py --origin BEL --destination FOR --departure-date 2026-06-27 --output data/captures/azul-bel-for.json
-```
-
-O navegador abre visível. Se aparecer CAPTCHA, login ou seleção adicional, faça
-isso manualmente e pressione Enter no terminal quando a lista de voos estiver na
-tela. Depois importe o JSON na aba **Captura oficial**.
-
 ## Rodar localmente
 
 ```bash
