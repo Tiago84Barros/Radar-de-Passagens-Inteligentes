@@ -46,6 +46,9 @@ class Settings:
     app_password: str | None
     gemini_api_key: str | None
     openai_api_key: str | None
+    choice_assistant_provider: str
+    openai_choice_model: str
+    gemini_choice_model: str
     serpapi_api_key: str | None
     serpapi_deep_search: bool
     serpapi_no_cache: bool
@@ -69,6 +72,12 @@ class Settings:
         self.app_password = get_config_value("APP_PASSWORD")
         self.gemini_api_key = get_config_value("GEMINI_API_KEY")
         self.openai_api_key = get_config_value("OPENAI_API_KEY")
+        self.choice_assistant_provider = get_config_value("CHOICE_ASSISTANT_PROVIDER", "auto") or "auto"
+        self.openai_choice_model = get_config_value("OPENAI_CHOICE_MODEL", "gpt-4o-mini") or "gpt-4o-mini"
+        self.gemini_choice_model = (
+            get_config_value("GEMINI_CHOICE_MODEL", "gemini-2.5-flash-lite")
+            or "gemini-2.5-flash-lite"
+        )
         self.serpapi_api_key = get_config_value("SERPAPI_API_KEY")
         self.serpapi_deep_search = _as_bool(get_config_value("SERPAPI_DEEP_SEARCH", "true"))
         self.serpapi_no_cache = _as_bool(get_config_value("SERPAPI_NO_CACHE", "true"))

@@ -24,6 +24,14 @@ from services.miles_service import (
 from services.official_capture_parser import parse_azul_visible_fares
 from services.official_search_links import build_official_search_links
 from services.recommendation_service import rank_flight_options
+from services.choice_assistant_service import (
+    ENGINE_AUTO,
+    ENGINE_GEMINI,
+    ENGINE_LOCAL,
+    ENGINE_OPENAI,
+    analyze_confirmed_offers,
+    assistant_engines,
+)
 from services.github_actions_service import is_configured as github_trigger_configured
 from components.monitor_prompt import render_monitor_prompt
 from utils.formatters import format_date_br, format_duration_short, format_stops
@@ -661,6 +669,96 @@ def _render_official_search_shortcuts(form: dict) -> None:
             st.link_button(link["label"], link["url"], use_container_width=True)
 
 
+def _render_choice_assistant(options: list[dict], form: dict) -> None:
+    """Render a grounded recommendation whose facts always come from APIs."""
+    if not options:
+        return
+
+    st.markdown("---")
+    st.markdown("### Assistente de Escolha")
+    st.caption(
+        "Compara somente as tarifas confirmadas acima. A IA pode escolher entre "
+        "essas opções, mas preços, datas e links continuam vindo das APIs."
+    )
+
+    settings = get_settings()
+    available = assistant_engines(settings)
+    labels = {
+        ENGINE_AUTO: "Automático",
+        ENGINE_LOCAL: "Análise local",
+        ENGINE_OPENAI: "OpenAI",
+        ENGINE_GEMINI: "Gemini",
+    }
+    choices = [ENGINE_LOCAL]
+    if len(available) > 1:
+        choices = [ENGINE_AUTO, *[engine for engine in available if engine != ENGINE_LOCAL], ENGINE_LOCAL]
+    selected_engine = st.radio(
+        "Motor da análise",
+        choices,
+        format_func=lambda value: labels[value],
+        horizontal=True,
+        key="choice_assistant_engine",
+    )
+
+    if st.button("Analisar custo-benefício", key="choice_assistant_run", type="primary"):
+        with st.spinner("Comparando as opções confirmadas..."):
+            st.session_state["choice_assistant_result"] = analyze_confirmed_offers(
+                options,
+                form,
+                engine=selected_engine,
+                settings=settings,
+            )
+
+    result = st.session_state.get("choice_assistant_result")
+    if not result:
+        return
+    if not result.get("ok"):
+        st.info(result.get("message") or "Não há opções confirmadas para analisar.")
+        return
+
+    selected = result["selected_offer"]
+    airline = get_airline_name(selected.get("airline") or "") or "opção confirmada"
+    st.markdown(f"#### Melhor custo-benefício: {airline}")
+    st.markdown(
+        f"**{format_brl(selected['price_brl'])}** · "
+        f"{format_duration_short(selected.get('duration_minutes')) or 'duração não informada'} · "
+        f"{format_stops(selected.get('stops')) or 'conexões não informadas'}"
+    )
+    st.caption(
+        f"Análise: {result['engine_label']} · "
+        f"{result['confirmed_count']} tarifa(s) confirmada(s) comparada(s)"
+    )
+    for reason in result.get("reasons") or []:
+        st.markdown(f"- {reason}")
+    for warning in result.get("warnings") or []:
+        st.warning(warning)
+
+    if result.get("fallback_reason"):
+        st.info(result["fallback_reason"])
+
+    alternative = result.get("alternative_offer")
+    if alternative:
+        alternative_airline = (
+            get_airline_name(alternative.get("airline") or "") or "outra opção"
+        )
+        st.caption(
+            f"Alternativa mais econômica: {alternative_airline} por "
+            f"{format_brl(alternative['price_brl'])}."
+        )
+
+    booking_link = selected.get("booking_link") or selected.get("source_url")
+    outbound_link = selected.get("outbound_booking_link")
+    return_link = selected.get("return_booking_link")
+    if booking_link:
+        st.link_button("Abrir fonte confirmada", booking_link)
+    elif outbound_link or return_link:
+        cols = st.columns(2)
+        if outbound_link:
+            cols[0].link_button("Abrir fonte da ida", outbound_link, use_container_width=True)
+        if return_link:
+            cols[1].link_button("Abrir fonte da volta", return_link, use_container_width=True)
+
+
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 
 def _render_search_tab() -> None:
@@ -770,6 +868,7 @@ def _render_search_tab() -> None:
             "max_connection_hubs": int(max_connection_hubs),
         }
         st.session_state["last_search_form"] = form
+        st.session_state.pop("choice_assistant_result", None)
         with st.spinner("Buscando as melhores tarifas..."):
             try:
                 st.session_state["last_search_results"] = _run_manual_search(form)
@@ -885,6 +984,9 @@ def _render_search_tab() -> None:
         st.markdown("---")
         for option in ranking["sorted_options"]:
             _render_result_card(option, form.get("min_mile_value") or DEFAULT_CENTS_PER_MILE)
+
+    assistant_options = (results_data.get("packages") or []) if form.get("return_date") else outbound
+    _render_choice_assistant(assistant_options, form)
 
     st.markdown("---")
     render_monitor_prompt(form)
@@ -1037,6 +1139,8 @@ def _render_settings_tab() -> None:
     rows = [
         ("SerpApi Google Flights (API principal de preços)", bool(getattr(settings, "serpapi_api_key", None))),
         ("Travelpayouts (API complementar/cache)", bool(getattr(settings, "travelpayouts_api_token", None))),
+        ("OpenAI (consultoria sobre tarifas confirmadas)", bool(settings.openai_api_key)),
+        ("Gemini (consultoria sobre tarifas confirmadas)", bool(settings.gemini_api_key)),
         ("Telegram", bool(settings.telegram_bot_token and settings.telegram_chat_id)),
         ("Banco de dados", diag["driver"] != "-"),
         ("GitHub Actions (executar agora)", github_trigger_configured()),
@@ -1048,6 +1152,7 @@ def _render_settings_tab() -> None:
     st.info(
         "🛰️ O app só exibe tarifas retornadas por APIs configuradas "
         "(SerpApi Google Flights e/ou Travelpayouts) ou importadas manualmente de fonte oficial. "
+        "Gemini e OpenAI apenas comparam opções já confirmadas; elas não pesquisam nem criam preços. "
         "Sem fonte confirmada, não há resultado."
     )
     st.caption(f"Banco: {diag['driver']} · host {diag['host']} · fonte: {diag['source']}")

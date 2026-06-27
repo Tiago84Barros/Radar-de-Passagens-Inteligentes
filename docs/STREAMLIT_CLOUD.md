@@ -43,6 +43,13 @@ SERPAPI_MAX_FLEX_DAYS = "2"
 TRAVELPAYOUTS_TOKEN = ""
 TRAVELPAYOUTS_API_TOKEN = ""
 
+# Assistente de Escolha (opcional; não participa da busca de preços)
+OPENAI_API_KEY = ""
+GEMINI_API_KEY = ""
+CHOICE_ASSISTANT_PROVIDER = "auto"
+OPENAI_CHOICE_MODEL = "gpt-4o-mini"
+GEMINI_CHOICE_MODEL = "gemini-2.5-flash-lite"
+
 TELEGRAM_BOT_TOKEN = ""
 TELEGRAM_CHAT_ID = ""
 
@@ -53,9 +60,15 @@ SMTP_PASSWORD = ""
 ALERT_FROM_EMAIL = "alerts@radar.local"
 ```
 
+OpenAI e Gemini recebem somente opções já confirmadas pelas APIs. Se nenhuma
+das duas chaves estiver configurada, o Assistente de Escolha continua
+funcionando com a análise local segura.
+
 ## Monitoramento 24h
 
-O arquivo `.github/workflows/monitor.yml` roda `scripts/run_monitor.py` a cada 30 minutos e também pode ser disparado manualmente por **workflow_dispatch**.
+O arquivo `.github/workflows/monitor-searches.yml` roda
+`scripts/run_monitoring_bot.py` a cada 2 horas e também pode ser disparado
+manualmente por **workflow_dispatch**.
 
 Configure os mesmos secrets no GitHub Actions em:
 

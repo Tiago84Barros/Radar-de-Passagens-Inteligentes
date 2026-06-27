@@ -7,12 +7,14 @@ MVP em Streamlit para rastrear passagens aéreas baratas, salvar histórico de c
 - Dashboard com buscas ativas, alertas disparados, menor preço recente e rotas monitoradas.
 - Cadastro de monitoramento com origem, destino ou `ANYWHERE`, datas, passageiros, preço máximo, moeda, bagagem e frequência.
 - Providers de busca ativa: SerpApi Google Flights e Travelpayouts.
+- Assistente de Escolha opcional com OpenAI ou Gemini, limitado a comparar
+  tarifas já confirmadas pelas APIs.
 - Sem tarifas simuladas: na ausência de fonte confirmada, a busca retorna vazia.
 - Histórico de preços por rota.
 - Comparação entre provedores.
 - Regras de preço: abaixo do limite, queda contra média, menor histórico e oportunidade rara.
 - Alertas por Telegram e e-mail.
-- GitHub Actions agendado a cada 30 minutos.
+- GitHub Actions agendado a cada 2 horas.
 - Banco via Supabase/PostgreSQL, com fallback SQLite para teste local.
 
 ## Radar de decisão (dinheiro × milhas)
@@ -73,6 +75,18 @@ API, o app não transforma essa busca em tarifa confirmada. Nesses casos, a tela
 vazia mostra atalhos para abrir a mesma rota/data em fontes reais, começando
 pela Azul, sem registrar preço inventado.
 
+### Assistente de Escolha
+
+Depois da busca, o painel **Assistente de Escolha** compara preço, duração,
+conexões, orçamento, risco de bilhetes separados e ofertas reais em milhas.
+Ele sempre funciona em modo local e, opcionalmente, pode usar OpenAI ou Gemini.
+
+As IAs não recebem companhia, data ou link e não escrevem fatos livres. Elas
+podem apenas selecionar o ID de uma tarifa confirmada e códigos de motivos já
+calculados pelo app. Valores, datas, fontes e links são renderizados diretamente
+dos dados das APIs. Uma resposta inválida ou uma falha da IA aciona
+automaticamente a análise local segura.
+
 ### Captura assistida em fonte oficial
 
 A aba **Captura oficial** cobre o caso em que a tarifa existe no site da
@@ -130,9 +144,16 @@ Crie um projeto Supabase e copie a string de conexão PostgreSQL para:
 DATABASE_URL = "postgresql://..."
 SERPAPI_API_KEY = "..."
 TRAVELPAYOUTS_API_TOKEN = "..."
+
+# Opcionais: somente para o Assistente de Escolha no app
+OPENAI_API_KEY = "..."
+GEMINI_API_KEY = "..."
+CHOICE_ASSISTANT_PROVIDER = "auto"
 ```
 
-Configure esses secrets tanto no Streamlit Cloud quanto no GitHub Actions.
+Configure `DATABASE_URL`, SerpApi e Travelpayouts tanto no Streamlit Cloud
+quanto no GitHub Actions. As chaves OpenAI/Gemini são necessárias apenas no
+Streamlit Cloud, pois o bot não usa LLM para pesquisar ou validar tarifas.
 
 ## Testes
 
