@@ -80,6 +80,10 @@ pela Azul, sem registrar preço inventado.
 Depois da busca, o painel **Assistente de Escolha** compara preço, duração,
 conexões, orçamento, risco de bilhetes separados e ofertas reais em milhas.
 Ele sempre funciona em modo local e, opcionalmente, pode usar OpenAI ou Gemini.
+Em viagens de ida e volta, o app cruza as melhores tarifas confirmadas de cada
+trecho, compara essas combinações com os pacotes fechados das APIs e aplica uma
+penalidade às reservas separadas. O veredito mostra o melhor pacote único, a
+melhor compra separada e qual formato oferece o melhor custo-benefício geral.
 
 As IAs não recebem companhia, data ou link e não escrevem fatos livres. Elas
 podem apenas selecionar o ID de uma tarifa confirmada e códigos de motivos já

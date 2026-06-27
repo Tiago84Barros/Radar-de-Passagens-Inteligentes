@@ -44,6 +44,7 @@ REASON_LABELS = {
     "GOOD_TIME_VALUE": "Economiza bastante tempo com acréscimo de preço moderado.",
     "BALANCED": "Apresenta o melhor equilíbrio calculado entre preço, duração e conexões.",
     "VERIFIED_MILES": "Possui uma oferta em milhas informada pela fonte, não apenas estimada.",
+    "SINGLE_BOOKING": "Mantém ida e volta na mesma reserva, com proteção conjunta.",
 }
 
 WARNING_LABELS = {
@@ -59,6 +60,7 @@ WARNING_LABELS = {
 
 REASON_PRIORITY = (
     "BALANCED",
+    "SINGLE_BOOKING",
     "LOWEST_PRICE",
     "FASTEST",
     "DIRECT_FLIGHT",
@@ -111,7 +113,10 @@ def assistant_engines(settings: Settings | None = None) -> list[str]:
 def is_confirmed_offer(option: dict[str, Any]) -> bool:
     """Accept only linked structured-API or explicitly verified offers."""
     confidence = str(option.get("source_confidence") or "").strip().lower()
-    source = str(option.get("provider") or option.get("source") or "").strip().lower()
+    source = " ".join(
+        str(option.get(field) or "").strip().lower()
+        for field in ("provider", "source")
+    )
     has_link = any(
         _valid_http_url(option.get(field))
         for field in ("booking_link", "source_url", "outbound_booking_link", "return_booking_link")
@@ -138,6 +143,7 @@ def analyze_confirmed_offers(
     """Select and explain the best confirmed offer without trusting LLM facts."""
     settings = settings or get_settings()
     preferences = preferences or {}
+    confirmed_count = sum(1 for offer in offers if is_confirmed_offer(offer))
     prepared = _prepare_offers(offers, preferences)
     if not prepared:
         return {
@@ -179,6 +185,14 @@ def analyze_confirmed_offers(
 
     cheapest = min(prepared, key=_price)
     alternative = cheapest if cheapest is not selected else None
+    best_closed = _best_group_option(
+        [item for item in prepared if not _is_separate_round_trip(item)],
+        preferences,
+    )
+    best_separate = _best_group_option(
+        [item for item in prepared if _is_separate_round_trip(item)],
+        preferences,
+    )
 
     return {
         "ok": True,
@@ -189,11 +203,14 @@ def analyze_confirmed_offers(
             ENGINE_LOCAL: "Análise local segura",
         }[mode],
         "selected_offer": _public_offer(selected),
+        "verdict_kind": _purchase_type(selected),
         "reasons": [REASON_LABELS[code] for code in reason_codes],
         "warnings": [WARNING_LABELS[code] for code in warning_codes],
         "alternative_offer": _public_offer(alternative) if alternative else None,
+        "best_closed_offer": _public_offer(best_closed),
+        "best_separate_offer": _public_offer(best_separate),
         "fallback_reason": fallback_reason,
-        "confirmed_count": len(prepared),
+        "confirmed_count": confirmed_count,
     }
 
 
@@ -203,7 +220,27 @@ def _prepare_offers(offers: list[dict[str, Any]], preferences: dict[str, Any]) -
         return []
 
     ranking = rank_flight_options(confirmed, {**preferences, "sort_by": "recomendados"})
-    ordered = list(ranking["sorted_options"])[:MAX_OFFERS_FOR_AI]
+    ranked = list(ranking["sorted_options"])
+    # Preserve the best candidate from each booking format even when one group
+    # dominates the first page, plus the global cheapest and fastest options.
+    representatives = [
+        _best_group_option(
+            [item for item in confirmed if not _is_separate_round_trip(item)],
+            preferences,
+        ),
+        _best_group_option(
+            [item for item in confirmed if _is_separate_round_trip(item)],
+            preferences,
+        ),
+        ranking.get("cheapest_option"),
+        ranking.get("fastest_option"),
+    ]
+    ordered: list[dict[str, Any]] = []
+    for candidate in [*representatives, *ranked]:
+        if candidate is not None and candidate not in ordered:
+            ordered.append(candidate)
+        if len(ordered) >= MAX_OFFERS_FOR_AI:
+            break
     cheapest_price = min(_price(option) for option in ordered)
     fastest_duration = min(
         (_duration(option) for option in ordered if _duration(option) > 0),
@@ -262,6 +299,8 @@ def _reason_codes(
         codes.add("BALANCED")
     if option.get("miles_offer") and (option["miles_offer"] or {}).get("amount"):
         codes.add("VERIFIED_MILES")
+    if option.get("return_date") and not _is_separate_round_trip(option):
+        codes.add("SINGLE_BOOKING")
     return _ordered_codes(codes, REASON_PRIORITY)
 
 
@@ -385,6 +424,7 @@ def _ai_payload(prepared: list[dict[str, Any]], preferences: dict[str, Any]) -> 
                 "duration_minutes": _duration(item),
                 "stops": _stops(item),
                 "has_verified_miles": bool((item.get("miles_offer") or {}).get("amount")),
+                "purchase_type": _purchase_type(item),
                 "valid_reason_codes": item["_valid_reason_codes"],
                 "valid_warning_codes": item["_valid_warning_codes"],
             }
@@ -452,6 +492,26 @@ def _offer_by_id(
     if not offer_id:
         return None
     return next((item for item in prepared if item["_offer_id"] == offer_id), None)
+
+
+def _best_group_option(
+    options: list[dict[str, Any]],
+    preferences: dict[str, Any],
+) -> dict[str, Any] | None:
+    if not options:
+        return None
+    ranking = rank_flight_options(options, {**preferences, "sort_by": "recomendados"})
+    return ranking.get("recommended_option") or ranking.get("cheapest_option")
+
+
+def _is_separate_round_trip(option: dict[str, Any]) -> bool:
+    return bool(option.get("separate_round_trip"))
+
+
+def _purchase_type(option: dict[str, Any]) -> str:
+    if not option.get("return_date"):
+        return "one_way"
+    return "separate_reservations" if _is_separate_round_trip(option) else "single_booking"
 
 
 def _ordered_codes(codes: set[str], priority: tuple[str, ...], limit: int | None = None) -> list[str]:

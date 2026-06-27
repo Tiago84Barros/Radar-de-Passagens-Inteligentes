@@ -36,6 +36,25 @@ def _offer(
     }
 
 
+def _round_trip(price, *, separate=False, duration=240):
+    provider = "montado: ida + volta (2 bilhetes)" if separate else "serpapi_google_flights"
+    option = _offer(
+        price=price,
+        duration=duration,
+        provider=provider,
+        link="https://www.google.com/travel/flights/round-trip",
+    )
+    option.update(
+        {
+            "return_date": "2026-09-17",
+            "source": "montado_ida_volta" if separate else "serpapi_google_flights",
+            "separate_ticket": separate,
+            "separate_round_trip": separate,
+        }
+    )
+    return option
+
+
 def test_local_assistant_uses_only_confirmed_linked_offers():
     confirmed = _offer(price=1200)
     unverified = _offer(
@@ -128,3 +147,54 @@ def test_llm_payload_has_no_links_airlines_or_dates():
     assert "2026-09-10" not in serialized
     assert "'LA'" not in serialized
     assert payload["offers"][0]["offer_id"] == "F1"
+
+
+def test_round_trip_verdict_compares_closed_and_separate_formats():
+    closed = _round_trip(1000)
+    separate = _round_trip(600, separate=True)
+
+    result = assistant.analyze_confirmed_offers(
+        [closed, separate],
+        {},
+        engine="local",
+        settings=_settings(),
+    )
+
+    assert result["verdict_kind"] == "separate_reservations"
+    assert result["selected_offer"]["price_brl"] == 600
+    assert result["best_closed_offer"]["price_brl"] == 1000
+    assert result["best_separate_offer"]["price_brl"] == 600
+    assert assistant.WARNING_LABELS["SEPARATE_TICKETS"] in result["warnings"]
+
+
+def test_closed_package_wins_when_separate_savings_are_too_small_for_the_risk():
+    closed = _round_trip(1000)
+    separate = _round_trip(900, separate=True)
+
+    result = assistant.analyze_confirmed_offers(
+        [closed, separate],
+        {},
+        engine="local",
+        settings=_settings(),
+    )
+
+    assert result["verdict_kind"] == "single_booking"
+    assert result["selected_offer"]["price_brl"] == 1000
+    assert assistant.REASON_LABELS["SINGLE_BOOKING"] in result["reasons"]
+
+
+def test_ai_context_preserves_both_booking_formats_when_one_dominates():
+    closed_options = [
+        _round_trip(700 + index * 10, duration=200 + index)
+        for index in range(15)
+    ]
+    expensive_separate = _round_trip(5000, separate=True, duration=600)
+
+    prepared = assistant._prepare_offers(
+        [*closed_options, expensive_separate],
+        {},
+    )
+
+    assert len(prepared) == assistant.MAX_OFFERS_FOR_AI
+    assert any(item.get("separate_round_trip") for item in prepared)
+    assert any(not item.get("separate_round_trip") for item in prepared)

@@ -1,6 +1,10 @@
 from datetime import date
 
-from streamlit_app import _filter_return_options, _run_manual_search, _synthesize_packages
+from streamlit_app import (
+    _filter_return_options,
+    _run_manual_search,
+    _synthesize_packages,
+)
 
 
 def _leg(price, departure, *, airline="LA", link="https://latamairlines.com"):
@@ -64,6 +68,26 @@ def test_synthesized_package_preserves_requested_trip_duration():
     assert packages == []
 
 
+def test_synthesized_packages_cross_all_viable_outbound_and_return_options():
+    packages = _synthesize_packages(
+        [
+            _leg(500, "2026-07-10", airline="LA", link="https://latam.com/ida"),
+            _leg(450, "2026-07-10", airline="G3", link="https://voegol.com.br/ida"),
+        ],
+        [
+            _leg(400, "2026-07-17", airline="AD", link="https://voeazul.com.br/volta"),
+            _leg(550, "2026-07-17", airline="LA", link="https://latam.com/volta"),
+        ],
+        _form(),
+        0.035,
+    )
+
+    assert len(packages) == 4
+    assert {package["price_brl"] for package in packages} == {850.0, 900.0, 1000.0, 1050.0}
+    assert all(package["outbound_airline"] for package in packages)
+    assert all(package["return_airline"] for package in packages)
+
+
 def test_return_options_before_outbound_are_hidden():
     options = [
         {"departure_date": "2026-07-15", "price_brl": 400.0},
@@ -95,6 +119,45 @@ def test_manual_search_filters_return_cards_before_outbound(monkeypatch):
     assert [item["departure_date"] for item in results["return"]] == ["2026-07-18"]
     inbound_call = next(call for call in calls if call["origin"] == "GRU" and call["destination"] == "BEL")
     assert inbound_call["min_departure_date"] == date(2026, 7, 10)
+
+
+def test_manual_search_keeps_api_package_and_separate_combinations(monkeypatch):
+    def fake_search(params):
+        if params.get("return_date") is not None:
+            return [
+                {
+                    **_raw_offer("2026-07-10", 1100),
+                    "return_date": "2026-07-17",
+                }
+            ]
+        if params["origin"] == "BEL":
+            return [
+                {
+                    **_raw_offer("2026-07-10", 400),
+                    "origin": "BEL",
+                    "destination": "GRU",
+                }
+            ]
+        return [_raw_offer("2026-07-17", 450)]
+
+    monkeypatch.setattr("streamlit_app.search_all_providers", fake_search)
+    monkeypatch.setattr("streamlit_app.get_last_provider_diagnostic", lambda: {})
+
+    results = _run_manual_search(_form())
+
+    assert any(
+        not option.get("separate_round_trip")
+        for option in results["comparison_packages"]
+    )
+    assert any(
+        option.get("separate_round_trip")
+        for option in results["comparison_packages"]
+    )
+    assert min(
+        option["price_brl"]
+        for option in results["comparison_packages"]
+        if option.get("separate_round_trip")
+    ) == 850.0
 
 
 def _raw_offer(departure, price):

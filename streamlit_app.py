@@ -82,6 +82,10 @@ SORT_OPTIONS = {
     "Melhor milhas": "melhor_milhas",
 }
 
+MAX_LEG_CANDIDATES = 20
+MAX_ROUND_TRIP_CANDIDATES = 40
+MAX_DISPLAYED_ROUND_TRIPS = 15
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -200,16 +204,29 @@ def _run_manual_search(form: dict) -> dict[str, list[dict]]:
     )
     package_opts = [_offer_to_option(o, min_mile_value) for o in packages]
 
-    # As fontes raramente devolvem o combo ida+volta fechado. Quando não vier
-    # nenhum, montamos pacotes somando a ida + volta mais baratas (e combos por
-    # companhia), para o bloco "Pacotes ida e volta" sempre mostrar um total.
-    if form.get("return_date") and not package_opts:
-        package_opts = _synthesize_packages(outbound_opts, inbound_opts, form, min_mile_value)
+    comparison_packages = list(package_opts)
+    if form.get("return_date"):
+        # Compara sempre os pacotes fechados das APIs com compras separadas.
+        # Isso não faz novas chamadas: apenas cruza as tarifas de ida e volta
+        # que já foram confirmadas acima.
+        separate_packages = _synthesize_packages(
+            outbound_opts,
+            inbound_opts,
+            form,
+            min_mile_value,
+        )
+        comparison_packages = _merge_round_trip_candidates(
+            package_opts,
+            separate_packages,
+            form,
+        )
+        package_opts = comparison_packages[:MAX_DISPLAYED_ROUND_TRIPS]
 
     return {
         "outbound": outbound_opts,
         "return": inbound_opts,
         "packages": package_opts,
+        "comparison_packages": comparison_packages,
         "diagnostics": {"ida": diag_outbound, "volta": diag_inbound, "pacotes": diag_packages},
     }
 
@@ -238,16 +255,26 @@ def _parse_ui_day(value: Any) -> date | None:
 def _synthesize_packages(
     outbound_opts: list[dict], inbound_opts: list[dict], form: dict, min_mile_value: float
 ) -> list[dict]:
-    """Monta pacotes ida+volta somando trechos quando as fontes não trazem o
-    combo fechado: o overall mais barato (ida + volta) e, quando a mesma
-    companhia aparece nos dois trechos, o combo dela. Preço = ida + volta."""
+    """Build viable confirmed round trips from independent outbound/inbound legs."""
     from services.miles_service import enrich_deal_with_miles
 
     def _valid(opts: list[dict]) -> list[dict]:
-        return sorted(
-            [o for o in opts if float(o.get("price_brl") or 0) > 0],
-            key=lambda o: float(o.get("price_brl") or 0),
-        )
+        valid = [o for o in opts if float(o.get("price_brl") or 0) > 0]
+        if not valid:
+            return []
+        ranking = rank_flight_options(valid, {**form, "sort_by": "recomendados"})
+        selected: list[dict] = []
+        prioritized = [
+            ranking.get("cheapest_option"),
+            ranking.get("fastest_option"),
+            *ranking["sorted_options"],
+        ]
+        for option in prioritized:
+            if option is not None and option not in selected:
+                selected.append(option)
+            if len(selected) >= MAX_LEG_CANDIDATES:
+                break
+        return selected
 
     out = _valid(outbound_opts)
     inn = _valid(inbound_opts)
@@ -270,81 +297,143 @@ def _synthesize_packages(
         else None
     )
 
-    # Pares candidatos: o mais barato geral + o mais barato de cada companhia
-    # presente nos dois trechos.
-    pairs: list[tuple[dict, dict]] = [(out[0], inn[0])]
-    cheapest_in_by_airline: dict[str, dict] = {}
-    for o in inn:
-        cheapest_in_by_airline.setdefault(str(o.get("airline") or "").strip().lower(), o)
-    seen_out_airline: set[str] = set()
-    for o in out:
-        air = str(o.get("airline") or "").strip().lower()
-        if not air or air in seen_out_airline:
-            continue
-        seen_out_airline.add(air)
-        match = cheapest_in_by_airline.get(air)
-        if match:
-            pairs.append((o, match))
-
     packages: list[dict] = []
-    seen_totals: set[tuple] = set()
-    for ida, volta in pairs:
-        actual_dep = _day(ida.get("departure_date"))
-        actual_ret = _day(volta.get("departure_date"))
-        if actual_dep is None or actual_ret is None or actual_ret <= actual_dep:
-            continue
-        if requested_duration is not None and (actual_ret - actual_dep).days != requested_duration:
-            continue
+    seen_combinations: set[tuple] = set()
+    for ida in out:
+        for volta in inn:
+            actual_dep = _day(ida.get("departure_date"))
+            actual_ret = _day(volta.get("departure_date"))
+            if actual_dep is None or actual_ret is None or actual_ret <= actual_dep:
+                continue
+            if requested_duration is not None and (actual_ret - actual_dep).days != requested_duration:
+                continue
 
-        p_ida = float(ida.get("price_brl") or 0)
-        p_volta = float(volta.get("price_brl") or 0)
-        total = round(p_ida + p_volta, 2)
-        same_airline = str(ida.get("airline") or "").strip().lower() == str(volta.get("airline") or "").strip().lower()
-        airline = (ida.get("airline") or "") if same_airline else f"{ida.get('airline') or '?'} (ida) + {volta.get('airline') or '?'} (volta)"
-        dedupe_key = (round(total, 2), airline)
-        if dedupe_key in seen_totals:
-            continue
-        seen_totals.add(dedupe_key)
-        dur_ida, dur_volta = ida.get("duration_minutes"), volta.get("duration_minutes")
-        duration = (dur_ida + dur_volta) if (dur_ida and dur_volta) else None
-        # Confiabilidade do pacote = a pior dos dois trechos.
-        _confs = {str(ida.get("source_confidence") or ""), str(volta.get("source_confidence") or "")}
-        pkg_conf = (
-            "demo"
-            if "demo" in _confs
-            else ("unverified" if "unverified" in _confs else ("verified" if "verified" in _confs else "real"))
+            p_ida = float(ida.get("price_brl") or 0)
+            p_volta = float(volta.get("price_brl") or 0)
+            total = round(p_ida + p_volta, 2)
+            ida_airline = str(ida.get("airline") or "").strip()
+            volta_airline = str(volta.get("airline") or "").strip()
+            same_airline = ida_airline.lower() == volta_airline.lower()
+            airline = (
+                ida_airline
+                if same_airline
+                else f"{ida_airline or '?'} (ida) + {volta_airline or '?'} (volta)"
+            )
+            dedupe_key = (
+                actual_dep,
+                actual_ret,
+                round(total, 2),
+                ida_airline.lower(),
+                volta_airline.lower(),
+                ida.get("booking_link") or "",
+                volta.get("booking_link") or "",
+            )
+            if dedupe_key in seen_combinations:
+                continue
+            seen_combinations.add(dedupe_key)
+
+            dur_ida = int(ida.get("duration_minutes") or 0)
+            dur_volta = int(volta.get("duration_minutes") or 0)
+            duration = dur_ida + dur_volta if dur_ida and dur_volta else None
+            ida_stops = int(ida.get("stops") or 0)
+            volta_stops = int(volta.get("stops") or 0)
+
+            # Confiabilidade do conjunto = a pior confiabilidade dos dois trechos.
+            confidences = {
+                str(ida.get("source_confidence") or ""),
+                str(volta.get("source_confidence") or ""),
+            }
+            package_confidence = (
+                "demo"
+                if "demo" in confidences
+                else (
+                    "unverified"
+                    if "unverified" in confidences
+                    else ("verified" if "verified" in confidences else "real")
+                )
+            )
+            deal = {
+                "price_brl": total,
+                "price_outbound": p_ida,
+                "price_return": p_volta,
+                "airline": airline,
+                "outbound_airline": ida_airline,
+                "return_airline": volta_airline,
+                "provider": "montado: ida + volta (2 bilhetes)",
+                "source": "montado_ida_volta",
+                "source_name": "Ida + volta em reservas separadas",
+                "stops": ida_stops + volta_stops,
+                "outbound_stops": ida_stops,
+                "return_stops": volta_stops,
+                "duration_minutes": duration,
+                "outbound_duration_minutes": dur_ida or None,
+                "return_duration_minutes": dur_volta or None,
+                "departure_date": actual_dep,
+                "return_date": actual_ret,
+                "booking_link": "",
+                "outbound_booking_link": ida.get("booking_link") or "",
+                "return_booking_link": volta.get("booking_link") or "",
+                "origin_iata": form.get("origin_iata") or "",
+                "destination_iata": form.get("destination_iata") or "",
+                "price_note": None,
+                "connections": [],
+                "miles_offer": None,
+                "category": "pacote_montado",
+                "source_confidence": package_confidence,
+                "separate_ticket": True,
+                "separate_round_trip": True,
+                "airline_change": not same_airline,
+                "connection_risk": "baixo",
+                "score": 0,
+            }
+            packages.append(enrich_deal_with_miles(deal, min_mile_value))
+
+    if not packages:
+        return []
+    ranking = rank_flight_options(packages, {**form, "sort_by": "recomendados"})
+    return list(ranking["sorted_options"])[:MAX_ROUND_TRIP_CANDIDATES]
+
+
+def _merge_round_trip_candidates(
+    api_packages: list[dict],
+    separate_packages: list[dict],
+    form: dict,
+) -> list[dict]:
+    """Merge API packages and separate reservations into one ranked universe."""
+    unique: dict[tuple, dict] = {}
+    for option in [*api_packages, *separate_packages]:
+        key = (
+            str(option.get("departure_date") or "")[:10],
+            str(option.get("return_date") or "")[:10],
+            round(float(option.get("price_brl") or 0), 2),
+            str(option.get("airline") or "").strip().lower(),
+            bool(option.get("separate_round_trip")),
+            str(option.get("booking_link") or ""),
+            str(option.get("outbound_booking_link") or ""),
+            str(option.get("return_booking_link") or ""),
         )
-        deal = {
-            "price_brl": total,
-            "price_outbound": p_ida,
-            "price_return": p_volta,
-            "airline": airline,
-            "provider": "montado: ida + volta (2 bilhetes)",
-            "source": "montado_ida_volta",
-            "stops": (int(ida.get("stops") or 0) + int(volta.get("stops") or 0)),
-            "duration_minutes": duration,
-            "departure_date": actual_dep,
-            "return_date": actual_ret,
-            "booking_link": "",
-            "outbound_booking_link": ida.get("booking_link") or "",
-            "return_booking_link": volta.get("booking_link") or "",
-            "origin_iata": form.get("origin_iata") or "",
-            "destination_iata": form.get("destination_iata") or "",
-            "price_note": None,  # é o total da viagem, não "somente ida"
-            "connections": [],
-            "miles_offer": None,
-            "category": "pacote_montado",
-            "source_confidence": pkg_conf,
-            "separate_ticket": True,
-            "separate_round_trip": True,
-            "airline_change": not same_airline,
-            "connection_risk": "baixo",
-            "score": 0,
-        }
-        packages.append(enrich_deal_with_miles(deal, min_mile_value))
+        unique.setdefault(key, option)
 
-    packages.sort(key=lambda o: float(o.get("price_brl") or 0))
-    return packages[:6]
+    candidates = list(unique.values())
+    if not candidates:
+        return []
+    ranking = rank_flight_options(candidates, {**form, "sort_by": "recomendados"})
+    selected = list(ranking["sorted_options"])[:MAX_ROUND_TRIP_CANDIDATES]
+    for group in (
+        [option for option in candidates if not option.get("separate_round_trip")],
+        [option for option in candidates if option.get("separate_round_trip")],
+    ):
+        if not group:
+            continue
+        group_ranking = rank_flight_options(group, {**form, "sort_by": "recomendados"})
+        representative = group_ranking.get("recommended_option")
+        if representative is None or representative in selected:
+            continue
+        if len(selected) >= MAX_ROUND_TRIP_CANDIDATES:
+            selected[-1] = representative
+        else:
+            selected.append(representative)
+    return selected
 
 
 # ── Result cards ──────────────────────────────────────────────────────────────
@@ -716,14 +805,50 @@ def _render_choice_assistant(options: list[dict], form: dict) -> None:
         st.info(result.get("message") or "Não há opções confirmadas para analisar.")
         return
 
+    if form.get("return_date"):
+        st.markdown("#### Comparação dos formatos de compra")
+        comparison_cols = st.columns(2)
+        comparison_items = [
+            ("Reserva única", result.get("best_closed_offer")),
+            ("Ida e volta separadas", result.get("best_separate_offer")),
+        ]
+        for column, (label, option) in zip(comparison_cols, comparison_items):
+            with column:
+                st.markdown(f"**{label}**")
+                if option:
+                    st.markdown(f"**{format_brl(option['price_brl'])}**")
+                    st.caption(
+                        f"{format_duration_short(option.get('duration_minutes')) or 'duração não informada'} · "
+                        f"{format_stops(option.get('stops')) or 'conexões não informadas'}"
+                    )
+                else:
+                    st.caption("Nenhuma opção confirmada neste formato.")
+
     selected = result["selected_offer"]
     airline = get_airline_name(selected.get("airline") or "") or "opção confirmada"
-    st.markdown(f"#### Melhor custo-benefício: {airline}")
+    verdict_label = {
+        "single_booking": "Reserva única mais vantajosa",
+        "separate_reservations": "Trechos separados mais vantajosos",
+        "one_way": "Melhor opção de ida",
+    }.get(result.get("verdict_kind"), "Melhor custo-benefício")
+    st.markdown(f"#### Veredito: {verdict_label}")
+    st.markdown(f"**{airline}**")
     st.markdown(
         f"**{format_brl(selected['price_brl'])}** · "
         f"{format_duration_short(selected.get('duration_minutes')) or 'duração não informada'} · "
         f"{format_stops(selected.get('stops')) or 'conexões não informadas'}"
     )
+    if result.get("verdict_kind") == "separate_reservations":
+        outbound_airline = get_airline_name(selected.get("outbound_airline") or "") or "companhia não informada"
+        return_airline = get_airline_name(selected.get("return_airline") or "") or "companhia não informada"
+        st.markdown(
+            f"Ida: **{outbound_airline}**, {format_brl(selected.get('price_outbound') or 0)} · "
+            f"{format_duration_short(selected.get('outbound_duration_minutes')) or 'duração não informada'}"
+        )
+        st.markdown(
+            f"Volta: **{return_airline}**, {format_brl(selected.get('price_return') or 0)} · "
+            f"{format_duration_short(selected.get('return_duration_minutes')) or 'duração não informada'}"
+        )
     st.caption(
         f"Análise: {result['engine_label']} · "
         f"{result['confirmed_count']} tarifa(s) confirmada(s) comparada(s)"
@@ -959,8 +1084,8 @@ def _render_search_tab() -> None:
         )
         if _synthesized:
             _pkg_subtitle += (
-                " · 🧩 Montado a partir da ida + volta mais baratas (2 bilhetes separados — "
-                "as fontes não trouxeram o pacote fechado)."
+                " · 🧩 Inclui combinações de ida + volta em 2 reservas separadas, "
+                "comparadas com os pacotes fechados das APIs."
             )
         _render_leg_section(
             "📦 Pacotes ida e volta",
@@ -985,7 +1110,14 @@ def _render_search_tab() -> None:
         for option in ranking["sorted_options"]:
             _render_result_card(option, form.get("min_mile_value") or DEFAULT_CENTS_PER_MILE)
 
-    assistant_options = (results_data.get("packages") or []) if form.get("return_date") else outbound
+    if form.get("return_date"):
+        assistant_options = (
+            results_data.get("comparison_packages")
+            or results_data.get("packages")
+            or []
+        )
+    else:
+        assistant_options = outbound
     _render_choice_assistant(assistant_options, form)
 
     st.markdown("---")
