@@ -22,6 +22,7 @@ from services.miles_service import (
 )
 from services.official_search_links import build_official_search_links
 from services.recommendation_service import rank_flight_options
+from services.serpapi_account_service import fetch_serpapi_usage
 from services.choice_assistant_service import (
     ENGINE_AUTO,
     ENGINE_GEMINI,
@@ -36,6 +37,11 @@ from utils.formatters import format_date_br, format_duration_short, format_stops
 
 st.set_page_config(page_title="Radar de Passagens Inteligentes", page_icon="✈️", layout="wide")
 load_custom_css()
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_serpapi_usage() -> dict[str, Any]:
+    return fetch_serpapi_usage()
 
 
 def _airline_logos_html(airline_str: str | None, size: str = "normal") -> str:
@@ -1189,6 +1195,71 @@ def _render_miles_tab() -> None:
         st.markdown(f"Estimativa de milhas para {format_brl(price)}: **{format_miles(estimate_miles_from_cash_price(price, min_mile_value))}**")
 
 
+def _format_usage_count(value: Any) -> str:
+    if value is None:
+        return "—"
+    try:
+        return f"{int(value):,}".replace(",", ".")
+    except (TypeError, ValueError):
+        return "—"
+
+
+def _render_serpapi_usage() -> None:
+    st.markdown("### Uso da SerpApi")
+    usage = _cached_serpapi_usage()
+    if not usage.get("ok"):
+        message = usage.get("message") or "Limite da SerpApi indisponível."
+        if usage.get("status") == "not_configured":
+            st.info(message)
+        else:
+            st.warning(message)
+        return
+
+    columns = st.columns(4)
+    columns[0].metric(
+        "Usadas neste mês",
+        _format_usage_count(usage.get("monthly_usage")),
+    )
+    columns[1].metric(
+        "Saldo disponível",
+        _format_usage_count(usage.get("total_searches_left")),
+    )
+    columns[2].metric(
+        "Limite mensal",
+        _format_usage_count(usage.get("monthly_limit")),
+    )
+    hourly_usage = _format_usage_count(usage.get("last_hour_searches"))
+    hourly_limit = _format_usage_count(usage.get("hourly_limit"))
+    columns[3].metric("Uso na última hora", f"{hourly_usage} / {hourly_limit}")
+
+    used_percent = usage.get("used_percent")
+    if used_percent is not None:
+        st.progress(
+            min(max(float(used_percent) / 100.0, 0.0), 1.0),
+            text=f"{float(used_percent):.1f}% do limite mensal utilizado",
+        )
+
+    level = usage.get("level")
+    remaining_percent = usage.get("remaining_percent")
+    if level == "exhausted":
+        st.error("Cota da SerpApi esgotada. As buscas dependerão da Travelpayouts.")
+    elif level == "critical":
+        st.error(f"Restam apenas {float(remaining_percent):.1f}% da cota mensal da SerpApi.")
+    elif level == "warning":
+        st.warning(f"Restam {float(remaining_percent):.1f}% da cota mensal da SerpApi.")
+
+    extra_credits = int(usage.get("extra_credits") or 0)
+    extra_note = (
+        f" · {_format_usage_count(extra_credits)} crédito(s) extra(s)"
+        if extra_credits > 0
+        else ""
+    )
+    st.caption(
+        f"{usage.get('plan_name') or 'Plano SerpApi'}{extra_note} · "
+        "atualização em cache por até 5 minutos"
+    )
+
+
 def _render_settings_tab() -> None:
     st.title("⚙️ Configurações")
     st.caption("Status das integrações configuradas (nunca exibimos segredos aqui).")
@@ -1207,6 +1278,8 @@ def _render_settings_tab() -> None:
     for label, ok in rows:
         st.markdown(f"{'✅' if ok else '⚠️'} **{label}** — {'configurado' if ok else 'não configurado'}")
 
+    st.markdown("---")
+    _render_serpapi_usage()
     st.markdown("---")
     st.info(
         "🛰️ O app só exibe tarifas retornadas por APIs configuradas "

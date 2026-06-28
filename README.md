@@ -70,6 +70,10 @@ de compra retornado pela API. Não há API de disponibilidade de milhas:
 estimativas de milhas são identificadas separadamente e não são tratadas como
 disponibilidade real.
 
+A aba **Configurações** consulta a Account API da SerpApi e mostra limite
+mensal, consumo, saldo, uso por hora e alertas de cota, sem exibir a chave ou
+dados de identidade da conta.
+
 Quando a companhia exibe preços em uma página dinâmica que não é retornada pela
 API, o app não transforma essa busca em tarifa confirmada. Nesses casos, a tela
 vazia mostra atalhos para abrir a mesma rota/data em fontes reais, começando
