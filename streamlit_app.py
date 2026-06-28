@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html as _html
 from datetime import date, timedelta
 from typing import Any
 
@@ -1204,49 +1205,93 @@ def _format_usage_count(value: Any) -> str:
         return "—"
 
 
-def _render_serpapi_usage() -> None:
-    st.markdown("### Uso da SerpApi")
-    usage = _cached_serpapi_usage()
+def _integration_status_html(rows: list[tuple[str, bool]]) -> str:
+    items = []
+    for label, configured in rows:
+        state_class = "is-ok" if configured else "is-off"
+        state_label = "Configurado" if configured else "Não configurado"
+        items.append(
+            f'<div class="settings-status-item {state_class}">'
+            f'<span class="settings-status-dot" aria-hidden="true"></span>'
+            f'<div class="settings-status-copy">'
+            f'<div class="settings-status-name">{_html.escape(label)}</div>'
+            f'<div class="settings-status-state">{state_label}</div>'
+            f'</div>'
+            f'</div>'
+        )
+    return f'<div class="settings-status-grid">{"".join(items)}</div>'
+
+
+def _serpapi_usage_html(usage: dict[str, Any]) -> str:
     if not usage.get("ok"):
-        message = usage.get("message") or "Limite da SerpApi indisponível."
-        if usage.get("status") == "not_configured":
-            st.info(message)
-        else:
-            st.warning(message)
-        return
-
-    columns = st.columns(4)
-    columns[0].metric(
-        "Usadas neste mês",
-        _format_usage_count(usage.get("monthly_usage")),
-    )
-    columns[1].metric(
-        "Saldo disponível",
-        _format_usage_count(usage.get("total_searches_left")),
-    )
-    columns[2].metric(
-        "Limite mensal",
-        _format_usage_count(usage.get("monthly_limit")),
-    )
-    hourly_usage = _format_usage_count(usage.get("last_hour_searches"))
-    hourly_limit = _format_usage_count(usage.get("hourly_limit"))
-    columns[3].metric("Uso na última hora", f"{hourly_usage} / {hourly_limit}")
-
-    used_percent = usage.get("used_percent")
-    if used_percent is not None:
-        st.progress(
-            min(max(float(used_percent) / 100.0, 0.0), 1.0),
-            text=f"{float(used_percent):.1f}% do limite mensal utilizado",
+        message = _html.escape(
+            str(usage.get("message") or "Limite da SerpApi indisponível.")
+        )
+        return (
+            '<section class="serpapi-quota-panel level-error">'
+            '<div class="serpapi-quota-head">'
+            '<div><div class="serpapi-quota-kicker">Controle de consumo</div>'
+            '<div class="serpapi-quota-title">Uso da SerpApi</div></div>'
+            '</div>'
+            f'<div class="serpapi-quota-error">{message}</div>'
+            '</section>'
         )
 
-    level = usage.get("level")
+    level = str(usage.get("level") or "normal").lower()
+    if level not in {"normal", "warning", "critical", "exhausted"}:
+        level = "normal"
+    level_label = {
+        "normal": "Cota saudável",
+        "warning": "Atenção ao saldo",
+        "critical": "Saldo crítico",
+        "exhausted": "Cota esgotada",
+    }[level]
+    plan_name = _html.escape(str(usage.get("plan_name") or "Plano SerpApi"))
+    used_percent = min(max(float(usage.get("used_percent") or 0), 0.0), 100.0)
     remaining_percent = usage.get("remaining_percent")
-    if level == "exhausted":
-        st.error("Cota da SerpApi esgotada. As buscas dependerão da Travelpayouts.")
+    remaining_label = (
+        f"{float(remaining_percent):.1f}% restante"
+        if remaining_percent is not None
+        else "Saldo percentual indisponível"
+    )
+
+    metrics = [
+        ("Usadas neste mês", _format_usage_count(usage.get("monthly_usage"))),
+        ("Saldo disponível", _format_usage_count(usage.get("total_searches_left"))),
+        ("Limite mensal", _format_usage_count(usage.get("monthly_limit"))),
+        (
+            "Uso na última hora",
+            f"{_format_usage_count(usage.get('last_hour_searches'))} / "
+            f"{_format_usage_count(usage.get('hourly_limit'))}",
+        ),
+    ]
+    metric_html = "".join(
+        f'<div class="serpapi-quota-stat">'
+        f'<div class="serpapi-quota-label">{_html.escape(label)}</div>'
+        f'<div class="serpapi-quota-value">{_html.escape(value)}</div>'
+        f'</div>'
+        for label, value in metrics
+    )
+
+    alert_html = ""
+    if level == "warning":
+        alert_html = (
+            '<div class="serpapi-quota-alert warning">'
+            f"Restam {float(remaining_percent or 0):.1f}% da cota mensal."
+            "</div>"
+        )
     elif level == "critical":
-        st.error(f"Restam apenas {float(remaining_percent):.1f}% da cota mensal da SerpApi.")
-    elif level == "warning":
-        st.warning(f"Restam {float(remaining_percent):.1f}% da cota mensal da SerpApi.")
+        alert_html = (
+            '<div class="serpapi-quota-alert critical">'
+            f"Restam apenas {float(remaining_percent or 0):.1f}% da cota mensal."
+            "</div>"
+        )
+    elif level == "exhausted":
+        alert_html = (
+            '<div class="serpapi-quota-alert exhausted">'
+            "Cota esgotada. As buscas dependerão da Travelpayouts."
+            "</div>"
+        )
 
     extra_credits = int(usage.get("extra_credits") or 0)
     extra_note = (
@@ -1254,10 +1299,31 @@ def _render_serpapi_usage() -> None:
         if extra_credits > 0
         else ""
     )
-    st.caption(
-        f"{usage.get('plan_name') or 'Plano SerpApi'}{extra_note} · "
-        "atualização em cache por até 5 minutos"
+    return (
+        f'<section class="serpapi-quota-panel level-{level}">'
+        '<div class="serpapi-quota-head">'
+        '<div><div class="serpapi-quota-kicker">Controle de consumo</div>'
+        '<div class="serpapi-quota-title">Uso da SerpApi</div></div>'
+        f'<div class="serpapi-plan-badge">{plan_name} · {level_label}</div>'
+        '</div>'
+        f'<div class="serpapi-quota-grid">{metric_html}</div>'
+        '<div class="serpapi-progress-row">'
+        f'<span><strong>{used_percent:.1f}%</strong> utilizado</span>'
+        f'<span>{_html.escape(remaining_label)}</span>'
+        '</div>'
+        '<div class="serpapi-progress-track" role="progressbar" '
+        f'aria-valuenow="{used_percent:.1f}" aria-valuemin="0" aria-valuemax="100">'
+        f'<div class="serpapi-progress-fill" style="width:{used_percent:.1f}%"></div>'
+        '</div>'
+        f'{alert_html}'
+        f'<div class="serpapi-quota-foot">Atualização em cache por até 5 minutos{extra_note}</div>'
+        '</section>'
     )
+
+
+def _render_serpapi_usage() -> None:
+    usage = _cached_serpapi_usage()
+    st.html(_serpapi_usage_html(usage))
 
 
 def _render_settings_tab() -> None:
@@ -1275,10 +1341,9 @@ def _render_settings_tab() -> None:
         ("Banco de dados", diag["driver"] != "-"),
         ("GitHub Actions (executar agora)", github_trigger_configured()),
     ]
-    for label, ok in rows:
-        st.markdown(f"{'✅' if ok else '⚠️'} **{label}** — {'configurado' if ok else 'não configurado'}")
+    st.markdown("### Integrações")
+    st.html(_integration_status_html(rows))
 
-    st.markdown("---")
     _render_serpapi_usage()
     st.markdown("---")
     st.info(

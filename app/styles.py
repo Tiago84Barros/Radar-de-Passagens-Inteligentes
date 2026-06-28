@@ -1402,6 +1402,186 @@ a.buy-link {
     .highlight-cards-grid { grid-template-columns: 1fr; }
 }
 
+/* ── Settings: integration status and SerpApi quota ─────────── */
+.settings-status-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    margin: 12px 0 24px;
+}
+.settings-status-item {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    padding: 12px 14px;
+    border: 1px solid var(--radar-line);
+    border-radius: 8px;
+    background: rgba(27,31,59,.72);
+}
+.settings-status-item.is-ok { border-left: 3px solid var(--radar-green); }
+.settings-status-item.is-off { border-left: 3px solid #F4B860; }
+.settings-status-dot {
+    width: 10px;
+    height: 10px;
+    flex: 0 0 10px;
+    border-radius: 50%;
+}
+.settings-status-item.is-ok .settings-status-dot {
+    background: var(--radar-green);
+    box-shadow: 0 0 0 4px rgba(123,201,160,.12);
+}
+.settings-status-item.is-off .settings-status-dot {
+    background: #F4B860;
+    box-shadow: 0 0 0 4px rgba(244,184,96,.12);
+}
+.settings-status-copy { min-width: 0; }
+.settings-status-name {
+    color: var(--radar-ink);
+    font-size: .9rem;
+    font-weight: 700;
+    line-height: 1.3;
+    overflow-wrap: anywhere;
+}
+.settings-status-state {
+    color: var(--radar-muted);
+    font-size: .76rem;
+    margin-top: 2px;
+}
+
+.serpapi-quota-panel {
+    border: 1px solid var(--radar-line);
+    border-radius: 8px;
+    background: #181D36;
+    padding: 20px;
+    margin: 8px 0 18px;
+    box-shadow: 0 14px 32px rgba(0,0,0,.20);
+}
+.serpapi-quota-panel.level-normal { border-top: 3px solid var(--radar-green); }
+.serpapi-quota-panel.level-warning { border-top: 3px solid #F4B860; }
+.serpapi-quota-panel.level-critical,
+.serpapi-quota-panel.level-exhausted { border-top: 3px solid #F2755A; }
+.serpapi-quota-panel.level-error { border-top: 3px solid var(--radar-muted); }
+.serpapi-quota-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 20px;
+}
+.serpapi-quota-kicker {
+    color: var(--radar-teal);
+    font-size: .7rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    margin-bottom: 3px;
+}
+.serpapi-quota-title {
+    color: var(--radar-ink);
+    font-family: var(--radar-font-display) !important;
+    font-size: 1.45rem;
+    font-weight: 700;
+    line-height: 1.2;
+}
+.serpapi-plan-badge {
+    max-width: 45%;
+    color: var(--radar-blue);
+    border: 1px solid rgba(124,156,245,.35);
+    background: rgba(124,156,245,.10);
+    border-radius: 999px;
+    padding: 5px 10px;
+    font-size: .72rem;
+    font-weight: 700;
+    text-align: right;
+    overflow-wrap: anywhere;
+}
+.serpapi-quota-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0;
+    margin-bottom: 20px;
+}
+.serpapi-quota-stat {
+    min-width: 0;
+    padding: 2px 16px;
+    border-left: 3px solid var(--radar-blue);
+}
+.serpapi-quota-stat:first-child { padding-left: 12px; border-left-color: #F2A154; }
+.serpapi-quota-stat:nth-child(2) { border-left-color: var(--radar-green); }
+.serpapi-quota-stat:nth-child(3) { border-left-color: var(--radar-blue); }
+.serpapi-quota-stat:nth-child(4) { border-left-color: #F2755A; }
+.serpapi-quota-label {
+    color: var(--radar-muted);
+    font-size: .72rem;
+    font-weight: 650;
+    line-height: 1.3;
+    min-height: 1.9em;
+}
+.serpapi-quota-value {
+    color: var(--radar-ink);
+    font-size: 1.75rem;
+    font-weight: 750;
+    line-height: 1.15;
+    margin-top: 5px;
+    overflow-wrap: anywhere;
+}
+.serpapi-progress-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    color: var(--radar-muted);
+    font-size: .78rem;
+    margin-bottom: 7px;
+}
+.serpapi-progress-row strong { color: var(--radar-ink); }
+.serpapi-progress-track {
+    width: 100%;
+    height: 8px;
+    border-radius: 999px;
+    overflow: hidden;
+    background: rgba(166,171,203,.14);
+}
+.serpapi-progress-fill {
+    height: 100%;
+    min-width: 0;
+    border-radius: inherit;
+    background: #F2A154;
+}
+.level-warning .serpapi-progress-fill { background: #F4B860; }
+.level-critical .serpapi-progress-fill,
+.level-exhausted .serpapi-progress-fill { background: #F2755A; }
+.serpapi-quota-alert {
+    margin-top: 14px;
+    padding: 9px 11px;
+    border-radius: 6px;
+    font-size: .8rem;
+    font-weight: 650;
+    line-height: 1.4;
+}
+.serpapi-quota-alert.warning {
+    color: #FFE2A9;
+    background: rgba(244,184,96,.10);
+    border: 1px solid rgba(244,184,96,.28);
+}
+.serpapi-quota-alert.critical,
+.serpapi-quota-alert.exhausted {
+    color: #FFD0C7;
+    background: rgba(242,117,90,.10);
+    border: 1px solid rgba(242,117,90,.28);
+}
+.serpapi-quota-foot {
+    color: var(--radar-muted);
+    font-size: .72rem;
+    margin-top: 12px;
+}
+.serpapi-quota-error {
+    color: var(--radar-muted);
+    font-size: .9rem;
+    line-height: 1.45;
+}
+
 /* ── Responsive ──────────────────────────────────────────────── */
 @media (max-width: 900px) {
     .top-shell { display: block; }
@@ -1415,6 +1595,18 @@ a.buy-link {
     .airline-cmp-grid { grid-template-columns: 1fr 1fr !important; }
     .fare-cards-grid { grid-template-columns: 1fr !important; }
     .radar-overview-grid { grid-template-columns: 1fr 1fr !important; }
+    .serpapi-quota-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 0; }
+}
+@media (max-width: 640px) {
+    .settings-status-grid { grid-template-columns: 1fr; }
+    .serpapi-quota-panel { padding: 16px; }
+    .serpapi-quota-head { display: block; }
+    .serpapi-plan-badge { max-width: none; width: fit-content; margin-top: 10px; text-align: left; }
+    .serpapi-quota-grid { grid-template-columns: 1fr; gap: 14px; }
+    .serpapi-quota-stat { padding: 0 0 0 12px; }
+    .serpapi-quota-label { min-height: 0; }
+    .serpapi-quota-value { font-size: 1.5rem; }
+    .serpapi-progress-row { align-items: flex-start; flex-direction: column; gap: 3px; }
 }
 </style>
 """
